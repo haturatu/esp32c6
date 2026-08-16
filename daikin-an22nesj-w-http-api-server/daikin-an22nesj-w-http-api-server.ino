@@ -20,6 +20,7 @@ constexpr uint8_t kArc446A3HealthByte = 29;
 constexpr uint8_t kArc446A3HealthMask = 0x08;
 constexpr uint8_t kArc446A3CleanByte = 6;
 constexpr uint8_t kArc446A3CleanMask = 0x08;
+constexpr uint8_t kDaikinDryTemperatureByte = 22;
 constexpr size_t kMaxRequestBody = 2048;
 constexpr uint16_t kMinutesPerDay = 24 * 60;
 constexpr uint16_t kMaxTimerMinutes = 12 * 60;
@@ -45,6 +46,8 @@ struct AcPatch {
   uint8_t mode = kDaikinAuto;
   bool hasTemperature = false;
   int temperature = 0;
+  bool hasDryOffset = false;
+  int dryOffset = 0;
   bool hasFan = false;
   uint8_t fan = kDaikinFanAuto;
   bool hasSwing = false;
@@ -76,6 +79,7 @@ StateSource stateSource = StateSource::Initial;
 String serialLine;
 String wifiSsid;
 String wifiPassword;
+uint8_t normalTemperature = kDefaultTemperature;
 bool timerClockKnown = false;
 uint16_t timerClockBaseMinutes = 0;
 uint32_t timerClockBaseAtMs = 0;
@@ -122,6 +126,12 @@ class JsonReader {
         if (ok && (patch.temperature < kDaikinMinTemp ||
                    patch.temperature > kDaikinMaxTemp)) {
           return fail("invalid_temperature", error, statusCode, 422);
+        }
+      } else if (key == "dry_offset") {
+        patch.hasDryOffset = true;
+        ok = parseInt(patch.dryOffset);
+        if (ok && (patch.dryOffset < -2 || patch.dryOffset > 2)) {
+          return fail("invalid_dry_offset", error, statusCode, 422);
         }
       } else if (key == "fan") {
         patch.hasFan = true;
@@ -385,6 +395,44 @@ uint16_t timerDurationFromTarget(const bool enabled, const uint16_t targetMinute
                                 currentMinutes) % kMinutesPerDay);
 }
 
+bool dryOffsetFromRaw(const uint8_t rawTemperature, int &offset) {
+  switch (rawTemperature) {
+    case 0xDC: offset = -2; return true;
+    case 0xDE: offset = -1; return true;
+    case 0xC0: offset = 0; return true;
+    case 0xC2: offset = 1; return true;
+    case 0xC4: offset = 2; return true;
+    default: return false;
+  }
+}
+
+bool setDryOffset(const int offset) {
+  uint8_t rawTemperature = 0;
+  switch (offset) {
+    case -2: rawTemperature = 0xDC; break;
+    case -1: rawTemperature = 0xDE; break;
+    case 0: rawTemperature = 0xC0; break;
+    case 1: rawTemperature = 0xC2; break;
+    case 2: rawTemperature = 0xC4; break;
+    default: return false;
+  }
+  ac.getRaw()[kDaikinDryTemperatureByte] = rawTemperature;
+  return true;
+}
+
+String dryOffsetJson(const uint8_t rawTemperature) {
+  int offset = 0;
+  return dryOffsetFromRaw(rawTemperature, offset) ? String(offset) : "null";
+}
+
+void syncNormalTemperatureFromAc() {
+  if (ac.getMode() == kDaikinDry) return;
+  const int temperature = static_cast<int>(ac.getTemp());
+  if (temperature >= kDaikinMinTemp && temperature <= kDaikinMaxTemp) {
+    normalTemperature = static_cast<uint8_t>(temperature);
+  }
+}
+
 String fanName(const uint8_t fan) {
   if (fan == kDaikinFanAuto) return "auto";
   if (fan == kDaikinFanQuiet) return "quiet";
@@ -407,7 +455,11 @@ String acStateJson() {
   json += ",\"mode\":\"";
   json += modeName(ac.getMode());
   json += "\",\"temperature\":";
-  json += String(static_cast<int>(ac.getTemp()));
+  if (ac.getMode() == kDaikinDry) json += "null";
+  else json += String(static_cast<int>(ac.getTemp()));
+  json += ",\"dry_offset\":";
+  if (ac.getMode() == kDaikinDry) json += dryOffsetJson(raw[kDaikinDryTemperatureByte]);
+  else json += "null";
   json += ",\"fan\":\"";
   json += fanName(ac.getFan());
   json += "\",\"swing\":";
@@ -475,12 +527,25 @@ void sendInvertedRawState(const uint8_t state[], const uint16_t repeat) {
 }
 
 void applyPatch(const AcPatch &patch, const uint16_t currentMinutes) {
+  const uint8_t previousMode = ac.getMode();
+  const uint8_t requestedMode = patch.hasMode ? patch.mode : previousMode;
+
   if (patch.hasMode) {
     ac.on();
     ac.setMode(patch.mode);
   }
   if (patch.hasPower) ac.setPower(patch.power);
-  if (patch.hasTemperature) ac.setTemp(patch.temperature);
+  if (requestedMode != kDaikinDry && !patch.hasTemperature) {
+    ac.setTemp(normalTemperature);
+  }
+  if (patch.hasTemperature) {
+    ac.setTemp(patch.temperature);
+    normalTemperature = static_cast<uint8_t>(patch.temperature);
+  }
+  if (requestedMode == kDaikinDry) {
+    if (patch.hasDryOffset) setDryOffset(patch.dryOffset);
+    else if (patch.hasMode && previousMode != kDaikinDry) setDryOffset(0);
+  }
   if (patch.hasFan) ac.setFan(patch.fan);
   if (patch.hasSwing) ac.setSwingVertical(patch.swing);
   if (patch.hasSleep) {
@@ -514,6 +579,10 @@ void applyPatch(const AcPatch &patch, const uint16_t currentMinutes) {
   }
 }
 
+bool patchUsesDryMode(const AcPatch &patch) {
+  return patch.hasMode ? patch.mode == kDaikinDry : ac.getMode() == kDaikinDry;
+}
+
 bool fanChangeIsLocked(const AcPatch &patch) {
   if (!patch.hasFan) return false;
 
@@ -543,6 +612,8 @@ void handleAcStatePatch() {
   if (!reader.parsePatch(patch, parseError, parseStatus)) {
     if (parseError == "invalid_temperature") {
       sendError(parseStatus, parseError.c_str(), "temperature must be between 10 and 32");
+    } else if (parseError == "invalid_dry_offset") {
+      sendError(parseStatus, parseError.c_str(), "dry_offset must be between -2 and 2");
     } else if (parseError == "unknown_field") {
       sendError(parseStatus, parseError.c_str(), "field is not supported");
     } else if (parseError == "empty_patch") {
@@ -553,6 +624,16 @@ void handleAcStatePatch() {
     return;
   }
 
+  if (patch.hasTemperature && patchUsesDryMode(patch)) {
+    sendError(422, "invalid_dry_temperature",
+              "temperature is not available in dry mode; use dry_offset");
+    return;
+  }
+  if (patch.hasDryOffset && !patchUsesDryMode(patch)) {
+    sendError(422, "invalid_dry_offset",
+              "dry_offset is only available in dry mode");
+    return;
+  }
   if (fanChangeIsLocked(patch)) {
     sendError(409, "fan_locked_by_feature",
               "fan cannot be changed while health or comfort is enabled");
@@ -587,6 +668,7 @@ void handleReplay() {
     return;
   }
   ac.setRaw(lastDaikinState, kDaikinStateLength);
+  syncNormalTemperatureFromAc();
   syncTimerClock(ac.getCurrentTime());
   sendCurrentState();
   sendJson(200, "{\"ok\":true,\"ir\":{\"transmitted\":true,\"acknowledged\":false}}");
@@ -744,6 +826,7 @@ void receiveIrFrame() {
       results.bits == kDaikinBits) {
     memcpy(lastDaikinState, results.state, kDaikinStateLength);
     ac.setRaw(lastDaikinState, kDaikinStateLength);
+    syncNormalTemperatureFromAc();
     syncTimerClock(ac.getCurrentTime());
     hasReceivedDaikinState = true;
     lastReceivedAtMs = millis();

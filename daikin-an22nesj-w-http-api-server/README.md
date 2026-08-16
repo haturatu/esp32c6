@@ -139,6 +139,7 @@ PATCHは全フィールドを検証してから候補状態へ一括適用し、
   "power": true,
   "mode": "cool",
   "temperature": 26,
+  "dry_offset": null,
   "fan": "auto",
   "swing": false,
   "sleep": false,
@@ -151,9 +152,21 @@ PATCHは全フィールドを検証してから候補状態へ一括適用し、
 }
 ```
 
-`temperature`は摂氏10〜32度です。`mode`は`auto`、`cool`、`heat`、`dry`、`fan`、
+`temperature`は通常モードでは摂氏10〜32度です。`mode`は`auto`、`cool`、`heat`、`dry`、`fan`、
 `fan`は`auto`、`quiet`、`1`〜`5`です。`timer`は現在時刻からの相対時間で、0〜720分
 （最大12時間）です。無効時は`null`です。
+
+除湿（`mode: "dry"`）では温度設定は使わず、`temperature`は`null`になります。
+代わりに`dry_offset`で除湿補正を表し、値は`-2`、`-1`、`0`、`1`、`2`です。
+除湿以外のモードでは`dry_offset`は`null`です。
+
+```json
+{
+  "mode": "dry",
+  "temperature": null,
+  "dry_offset": -1
+}
+```
 
 DaikinのIRフレーム内部ではタイマーが「0時からの絶対時刻」として保存されますが、APIでは
 リモコン表示に合わせて「何分後」を返します。受信フレームの現在時刻を基準にし、未受信時は
@@ -186,6 +199,7 @@ Content-Typeは`application/json`です。次のフィールドを任意の組�
   "power": true,
   "mode": "cool",
   "temperature": 26,
+  "dry_offset": null,
   "fan": "auto",
   "swing": true,
   "sleep": true,
@@ -201,6 +215,15 @@ Content-Typeは`application/json`です。次のフィールドを任意の組�
 `power`を最後に適用します。`timer.on`と`timer.off`は現在時刻からの相対分数です。
 タイマーは片方だけ、または両方を更新できます。720分を超える値は拒否します。
 
+除湿の変更例:
+
+```json
+{"mode":"dry","dry_offset":-1}
+```
+
+除湿中に`temperature`を指定した場合、または除湿以外で`dry_offset`を指定した場合は
+`422 Unprocessable Entity`で拒否します。除湿から冷房・暖房へ変更すると、最後に使用した通常温度を復元します。
+
 成功レスポンス:
 
 ```json
@@ -210,6 +233,7 @@ Content-Typeは`application/json`です。次のフィールドを任意の組�
     "power": true,
     "mode": "cool",
     "temperature": 26,
+    "dry_offset": null,
     "fan": "auto",
     "swing": false,
     "sleep": false,
