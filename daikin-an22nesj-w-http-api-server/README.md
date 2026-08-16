@@ -152,6 +152,24 @@ PATCHは全フィールドを検証してから候補状態へ一括適用し、
 `temperature`は摂氏10〜32度です。`mode`は`auto`、`cool`、`heat`、`dry`、`fan`、
 `fan`は`auto`、`quiet`、`1`〜`5`です。`timer`は0〜1439分の値で、無効時は`null`です。
 
+### リモコンと同じ風量制約
+
+純正リモコンの制約に合わせ、`health: true`（健康冷房）または
+`comfort: true`（風ないス）が有効な間は、`fan`を変更できません。該当するPATCHは
+`409 Conflict`で拒否し、内部状態と赤外線送信内容は変更しません。
+
+```json
+{
+  "error": {
+    "code": "fan_locked_by_feature",
+    "message": "fan cannot be changed while health or comfort is enabled"
+  }
+}
+```
+
+風量を変更する場合は、先に該当機能を無効化してください。`health: false`または
+`comfort: false`と`fan`を同じPATCHで指定した場合は、変更後に制約が解除されるため許可します。
+
 ## PATCH `/api/v1/ac/state`
 
 Content-Typeは`application/json`です。次のフィールドを任意の組み合わせで指定できます。

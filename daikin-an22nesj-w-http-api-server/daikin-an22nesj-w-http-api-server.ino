@@ -457,6 +457,17 @@ void applyPatch(const AcPatch &patch) {
   }
 }
 
+bool fanChangeIsLocked(const AcPatch &patch) {
+  if (!patch.hasFan) return false;
+
+  const uint8_t *raw = ac.getRaw();
+  const bool healthEnabled =
+      patch.hasHealth ? patch.health
+                      : ((raw[kArc446A3HealthByte] & kArc446A3HealthMask) != 0);
+  const bool comfortEnabled = patch.hasComfort ? patch.comfort : ac.getComfort();
+  return healthEnabled || comfortEnabled;
+}
+
 void handleAcStatePatch() {
   if (!server.hasArg("plain")) {
     sendError(400, "invalid_json", "request body is required");
@@ -482,6 +493,12 @@ void handleAcStatePatch() {
     } else {
       sendError(parseStatus, parseError.c_str(), "invalid JSON or field value");
     }
+    return;
+  }
+
+  if (fanChangeIsLocked(patch)) {
+    sendError(409, "fan_locked_by_feature",
+              "fan cannot be changed while health or comfort is enabled");
     return;
   }
 
