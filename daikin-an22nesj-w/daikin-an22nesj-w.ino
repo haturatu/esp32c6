@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <string.h>
 #include <IRrecv.h>
 #include <IRremoteESP8266.h>
 #include <IRsend.h>
@@ -10,20 +11,44 @@ constexpr uint16_t kIrReceiverPin = 5;
 constexpr uint8_t kDefaultTemperature = 26;
 
 IRDaikinESP ac(kIrLedPin);
+IRDaikinESP acInverted(kIrLedPin, true);
 IRrecv irrecv(kIrReceiverPin, 1024, 50, true);
 decode_results results;
+bool hasReceivedDaikinState = false;
+uint8_t lastDaikinState[kDaikinStateLength];
+
+// Captured from the ARC469A18 remote paired with AN22NESJ-W.
+const uint8_t kCapturedOnState[kDaikinStateLength] = {
+    0x11, 0xDA, 0x27, 0x00, 0xC5, 0x00, 0x00, 0xD7, 0x11, 0xDA,
+    0x27, 0x00, 0x42, 0x00, 0x00, 0x54, 0x11, 0xDA, 0x27, 0x00,
+    0x00, 0x39, 0x32, 0x00, 0xAF, 0x00, 0x00, 0x06, 0x60, 0x00,
+    0x00, 0xC1, 0x00, 0x00, 0x53};
+const uint8_t kCapturedOffState[kDaikinStateLength] = {
+    0x11, 0xDA, 0x27, 0x00, 0xC5, 0x00, 0x00, 0xD7, 0x11, 0xDA,
+    0x27, 0x00, 0x42, 0x00, 0x00, 0x54, 0x11, 0xDA, 0x27, 0x00,
+    0x00, 0x38, 0x32, 0x00, 0xAF, 0x00, 0x00, 0x06, 0x60, 0x00,
+    0x00, 0xC1, 0x00, 0x00, 0x52};
 
 void printHelp() {
-  Serial.println(F("[INFO] commands: on, off, cool [temp], heat [temp], dry [temp], fan, status, help"));
+  Serial.println(F("[INFO] commands: on, off, cool [temp], heat [temp], dry [temp], fan, replay, raw_on, raw_off, burst_on, burst_off, inv_on, inv_off, status, help"));
 }
 
-void sendCurrentState(const char *reason) {
+void sendCurrentState(const char *reason, const uint16_t repeat = 0) {
   Serial.print(F("[INFO] send: "));
   Serial.println(reason);
   Serial.print(F("[DEBUG] state: "));
   Serial.println(ac.toString());
-  ac.send();
+  ac.send(repeat);
   Serial.println(F("[INFO] IR frame sent"));
+}
+
+void sendInvertedRawState(const uint8_t state[], const char *reason) {
+  Serial.print(F("[INFO] send: "));
+  Serial.println(reason);
+  acInverted.setRaw(state, kDaikinStateLength);
+  Serial.println(F("[DEBUG] output polarity: inverted / active LOW"));
+  acInverted.send(2);
+  Serial.println(F("[INFO] inverted IR frame sent x3"));
 }
 
 void setModeFromCommand(const uint8_t mode, const String &command,
@@ -60,6 +85,29 @@ void handleCommand(String command) {
   } else if (command == "off") {
     ac.off();
     sendCurrentState("off");
+  } else if (command == "replay") {
+    if (hasReceivedDaikinState) {
+      ac.setRaw(lastDaikinState, kDaikinStateLength);
+      sendCurrentState("replay received DAIKIN state");
+    } else {
+      Serial.println(F("[WARN] receive a DAIKIN frame first"));
+    }
+  } else if (command == "raw_on") {
+    ac.setRaw(kCapturedOnState, kDaikinStateLength);
+    sendCurrentState("raw captured remote ON");
+  } else if (command == "raw_off") {
+    ac.setRaw(kCapturedOffState, kDaikinStateLength);
+    sendCurrentState("raw captured remote OFF");
+  } else if (command == "burst_on") {
+    ac.setRaw(kCapturedOnState, kDaikinStateLength);
+    sendCurrentState("raw captured remote ON x3", 2);
+  } else if (command == "burst_off") {
+    ac.setRaw(kCapturedOffState, kDaikinStateLength);
+    sendCurrentState("raw captured remote OFF x3", 2);
+  } else if (command == "inv_on") {
+    sendInvertedRawState(kCapturedOnState, "raw captured remote ON, inverted output");
+  } else if (command == "inv_off") {
+    sendInvertedRawState(kCapturedOffState, "raw captured remote OFF, inverted output");
   } else if (command.startsWith("cool")) {
     setModeFromCommand(kDaikinCool, command, "cool");
   } else if (command.startsWith("heat")) {
@@ -81,6 +129,13 @@ void receiveIrFrame() {
   Serial.println(F("[INFO] IR frame received from VS1838B"));
   Serial.print(resultToHumanReadableBasic(&results));
   Serial.println(resultToSourceCode(&results));
+  if (results.decode_type == decode_type_t::DAIKIN &&
+      results.bits == kDaikinBits) {
+    memcpy(lastDaikinState, results.state, kDaikinStateLength);
+    ac.setRaw(lastDaikinState, kDaikinStateLength);
+    hasReceivedDaikinState = true;
+    Serial.println(F("[INFO] captured state loaded; use replay to resend it"));
+  }
   irrecv.resume();
 }
 
@@ -89,6 +144,7 @@ void setup() {
   delay(1000);
 
   ac.begin();
+  acInverted.begin();
   irrecv.enableIRIn();
 
   Serial.println(F("[INFO] Daikin AN22NESJ-W IR test"));

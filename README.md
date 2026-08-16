@@ -60,6 +60,13 @@ cool 24
 heat 24
 dry 25
 fan
+replay
+raw_on
+raw_off
+burst_on
+burst_off
+inv_on
+inv_off
 status
 ```
 
@@ -68,4 +75,9 @@ status
 確認すること。VS1838B で純正リモコンのボタンを押すと、シリアルモニタに
 `IR frame received`、プロトコル、raw データが表示される。まず純正リモコンの
 `運転/停止` または `冷房` をエアコンへ向けず VS1838B に向けて押し、受信できる
-ことを確認してから GPIO4 の送信 LED をエアコンへ向ける。
+ことを確認する。その後 `replay` を入力すると、受信した純正リモコンの状態を
+そのままGPIO4から再送できる。
+
+`raw_on` / `raw_off` は、今回の純正リモコンから取得したON/OFFフレームを
+そのまま送る診断用コマンド。`burst_on` / `burst_off` は同じフレームを3回送り、
+`inv_on` / `inv_off` は送信極性を反転して3回送る。
