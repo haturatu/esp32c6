@@ -9,6 +9,7 @@
 constexpr uint16_t kIrLedPin = 4;
 constexpr uint16_t kIrReceiverPin = 5;
 constexpr uint8_t kDefaultTemperature = 26;
+constexpr bool kStartupIrTest = false;
 
 IRDaikinESP ac(kIrLedPin);
 IRDaikinESP acInverted(kIrLedPin, true);
@@ -157,7 +158,11 @@ void setup() {
   ac.setTemp(kDefaultTemperature);
   ac.setFan(kDaikinFanAuto);
 
-  sendCurrentState("startup test: ON COOL 26C AUTO");
+  if (kStartupIrTest) {
+    sendCurrentState("startup test: ON COOL 26C AUTO");
+  } else {
+    Serial.println(F("[INFO] startup IR test skipped; use raw_on or on"));
+  }
   printHelp();
 }
 
