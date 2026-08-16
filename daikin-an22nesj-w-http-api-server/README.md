@@ -58,6 +58,8 @@ PROVISION1 <hex-ssid> <hex-password>
 保存後、ESP32は再起動してNVSから読み込みます。Wi-Fi情報が未設定、または接続に失敗した場合は
 HTTPサーバーを起動せず、シリアルから再provisioningできます。
 
+時刻同期には`time.google.com`と`time.cloudflare.com`を使用します。
+
 Basic認証は実装しません。HTTP APIは信頼できるLANまたはVPN内だけで使用し、インターネットへ
 直接公開しないでください。将来、異なる信頼境界で使う場合はTLS終端プロキシまたはBearer tokenを
 追加する設計余地を残します。
@@ -83,7 +85,7 @@ arduino-cli upload -p /dev/ttyACM0 \
   daikin-an22nesj-w-http-api-server
 ```
 
-この作業ではGitHubへpushしません。
+GitHubへのpushは、変更内容を確認したうえで明示的に行ってください。
 
 ## APIの基本方針
 

@@ -732,7 +732,7 @@ bool connectWifi() {
     Serial.println(F("[WARN] Wi-Fi connection failed; HTTP server is not started"));
     return false;
   }
-  configTime(9 * 60 * 60, 0, "pool.ntp.org", "time.nist.gov");
+  configTime(9 * 60 * 60, 0, "time.google.com", "time.cloudflare.com");
   Serial.print(F("[INFO] Wi-Fi connected; IP: "));
   Serial.println(WiFi.localIP());
   return true;
