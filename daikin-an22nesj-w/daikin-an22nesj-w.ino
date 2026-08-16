@@ -13,6 +13,8 @@ constexpr uint8_t kArc446A3SleepByte = 29;
 constexpr uint8_t kArc446A3SleepMask = 0x04;
 constexpr uint8_t kArc446A3HealthByte = 29;
 constexpr uint8_t kArc446A3HealthMask = 0x08;
+constexpr uint8_t kArc446A3CleanByte = 6;
+constexpr uint8_t kArc446A3CleanMask = 0x08;
 constexpr bool kStartupIrTest = false;
 
 IRDaikinESP ac(kIrLedPin);
@@ -37,7 +39,7 @@ const uint8_t kCapturedOffState[kDaikinStateLength] = {
 void printHelp() {
   Serial.println(F("[INFO] power/mode: on, off, auto [temp], cool [temp], heat [temp], dry [temp], fan"));
   Serial.println(F("[INFO] settings: temp [10..32], fan auto|quiet|1|2|3|4|5, swing on|off"));
-  Serial.println(F("[INFO] features: sleep on|off, health on|off, comfort on|off, mold on|off, quiet on|off"));
+  Serial.println(F("[INFO] features: sleep on|off, health on|off, comfort on|off, clean on|off, quiet on|off"));
   Serial.println(F("[INFO] timers: timer-on [minutes], timer-off [minutes], timer-cancel"));
   Serial.println(F("[INFO] diagnostics: replay, raw_on, raw_off, burst_on, burst_off, inv_on, inv_off, status, help"));
 }
@@ -170,6 +172,18 @@ void setHealthFromCommand(const String &command) {
   sendCurrentState("health");
 }
 
+void setCleanFromCommand(const String &command, const char *name) {
+  bool enabled = false;
+  if (!parseToggle(command, name, enabled)) return;
+  uint8_t *raw = ac.getRaw();
+  if (enabled) {
+    raw[kArc446A3CleanByte] |= kArc446A3CleanMask;
+  } else {
+    raw[kArc446A3CleanByte] &= ~kArc446A3CleanMask;
+  }
+  sendCurrentState("clean");
+}
+
 void handleCommand(String command) {
   command.trim();
   command.toLowerCase();
@@ -241,12 +255,10 @@ void handleCommand(String command) {
       ac.setComfort(enabled);
       sendCurrentState("comfort");
     }
+  } else if (command.startsWith("clean")) {
+    setCleanFromCommand(command, "clean");
   } else if (command.startsWith("mold")) {
-    bool enabled = false;
-    if (parseToggle(command, "mold", enabled)) {
-      ac.setMold(enabled);
-      sendCurrentState("mold");
-    }
+    setCleanFromCommand(command, "mold");
   } else if (command.startsWith("quiet")) {
     bool enabled = false;
     if (parseToggle(command, "quiet", enabled)) {

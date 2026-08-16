@@ -77,8 +77,8 @@ health on
 health off
 comfort on
 comfort off
-mold on
-mold off
+clean on
+clean off
 quiet on
 quiet off
 timer-on 420
@@ -112,3 +112,4 @@ status
 
 ARC446A3の快眠は`byte[29]`の`0x04`として確認済みで、`sleep on/off`で操作できる。
 健康冷房は`byte[29]`の`0x08`として確認済みで、`health on/off`で操作できる。
+内部クリーンは`byte[6]`の`0x08`として確認済みで、`clean on/off`で操作できる。
