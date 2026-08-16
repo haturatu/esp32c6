@@ -71,6 +71,8 @@ fan 4
 fan 5
 swing on
 swing off
+sleep on
+sleep off
 comfort on
 comfort off
 mold on
@@ -105,3 +107,5 @@ status
 純正リモコンの未知ボタンをVS1838Bへ向けて押すと、前回のDAIKINフレームとの差分が
 `[DEBUG] diff byte[...]` として表示される。快眠・健康冷房などは、この差分を確認して
 から専用コマンドへ割り当てる。
+
+ARC446A3の快眠は`byte[29]`の`0x04`として確認済みで、`sleep on/off`で操作できる。

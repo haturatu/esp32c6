@@ -9,6 +9,8 @@
 constexpr uint16_t kIrLedPin = 4;
 constexpr uint16_t kIrReceiverPin = 5;
 constexpr uint8_t kDefaultTemperature = 26;
+constexpr uint8_t kArc446A3SleepByte = 29;
+constexpr uint8_t kArc446A3SleepMask = 0x04;
 constexpr bool kStartupIrTest = false;
 
 IRDaikinESP ac(kIrLedPin);
@@ -33,7 +35,7 @@ const uint8_t kCapturedOffState[kDaikinStateLength] = {
 void printHelp() {
   Serial.println(F("[INFO] power/mode: on, off, auto [temp], cool [temp], heat [temp], dry [temp], fan"));
   Serial.println(F("[INFO] settings: temp [10..32], fan auto|quiet|1|2|3|4|5, swing on|off"));
-  Serial.println(F("[INFO] features: comfort on|off, mold on|off, quiet on|off"));
+  Serial.println(F("[INFO] features: sleep on|off, comfort on|off, mold on|off, quiet on|off"));
   Serial.println(F("[INFO] timers: timer-on [minutes], timer-off [minutes], timer-cancel"));
   Serial.println(F("[INFO] diagnostics: replay, raw_on, raw_off, burst_on, burst_off, inv_on, inv_off, status, help"));
 }
@@ -142,6 +144,18 @@ void setTimerFromCommand(const String &command, const char *name,
   sendCurrentState(name);
 }
 
+void setSleepFromCommand(const String &command) {
+  bool enabled = false;
+  if (!parseToggle(command, "sleep", enabled)) return;
+  uint8_t *raw = ac.getRaw();
+  if (enabled) {
+    raw[kArc446A3SleepByte] |= kArc446A3SleepMask;
+  } else {
+    raw[kArc446A3SleepByte] &= ~kArc446A3SleepMask;
+  }
+  sendCurrentState("sleep");
+}
+
 void handleCommand(String command) {
   command.trim();
   command.toLowerCase();
@@ -197,6 +211,8 @@ void handleCommand(String command) {
     setFanFromCommand(command);
   } else if (command.startsWith("temp")) {
     setTemperatureFromCommand(command);
+  } else if (command.startsWith("sleep")) {
+    setSleepFromCommand(command);
   } else if (command.startsWith("swing")) {
     bool enabled = false;
     if (parseToggle(command, "swing", enabled)) {
