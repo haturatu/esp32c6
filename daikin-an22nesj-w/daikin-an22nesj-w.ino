@@ -49,6 +49,9 @@ void sendInvertedRawState(const uint8_t state[], const char *reason) {
   acInverted.setRaw(state, kDaikinStateLength);
   Serial.println(F("[DEBUG] output polarity: inverted / active LOW"));
   acInverted.send(2);
+  // The inverted sender considers HIGH to be off. Restore the normal
+  // low-side transistor off level before returning to the receive loop.
+  digitalWrite(kIrLedPin, LOW);
   Serial.println(F("[INFO] inverted IR frame sent x3"));
 }
 
@@ -145,7 +148,7 @@ void setup() {
   delay(1000);
 
   ac.begin();
-  acInverted.begin();
+  digitalWrite(kIrLedPin, LOW);
   irrecv.enableIRIn();
 
   Serial.println(F("[INFO] Daikin AN22NESJ-W IR test"));
