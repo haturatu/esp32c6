@@ -71,7 +71,7 @@ arduino-cli compile --jobs 4 \
   --build-path .build/daikin-http-api-fast \
   --fqbn 'esp32:esp32:esp32c6:CDCOnBoot=cdc' \
   --build-property 'compiler.cpp.extra_flags=-D_IR_ENABLE_DEFAULT_=false -DSEND_DAIKIN=true -DDECODE_DAIKIN=true' \
-  daikin-an22nesj-w-http-api
+  daikin-an22nesj-w-http-api-server
 ```
 
 書き込みは、実際のポートを確認してから行います。
@@ -80,7 +80,7 @@ arduino-cli compile --jobs 4 \
 arduino-cli upload -p /dev/ttyACM0 \
   --build-path .build/daikin-http-api-fast \
   --fqbn 'esp32:esp32:esp32c6:CDCOnBoot=cdc' \
-  daikin-an22nesj-w-http-api
+  daikin-an22nesj-w-http-api-server
 ```
 
 この作業ではGitHubへpushしません。
