@@ -3,6 +3,7 @@
 #include <WebServer.h>
 #include <WiFi.h>
 #include <string.h>
+#include <time.h>
 
 #include <IRrecv.h>
 #include <IRremoteESP8266.h>
@@ -20,6 +21,8 @@ constexpr uint8_t kArc446A3HealthMask = 0x08;
 constexpr uint8_t kArc446A3CleanByte = 6;
 constexpr uint8_t kArc446A3CleanMask = 0x08;
 constexpr size_t kMaxRequestBody = 2048;
+constexpr uint16_t kMinutesPerDay = 24 * 60;
+constexpr uint16_t kMaxTimerMinutes = 12 * 60;
 constexpr uint32_t kMinimumIrSendIntervalMs = 100;
 constexpr uint32_t kWifiConnectTimeoutMs = 15000;
 constexpr bool kEnableIrDiagnostics = false;
@@ -73,6 +76,9 @@ StateSource stateSource = StateSource::Initial;
 String serialLine;
 String wifiSsid;
 String wifiPassword;
+bool timerClockKnown = false;
+uint16_t timerClockBaseMinutes = 0;
+uint32_t timerClockBaseAtMs = 0;
 
 // Captured from the ARC446A3 remote paired with AN22NESJ-W.
 const uint8_t kCapturedOnState[kDaikinStateLength] = {
@@ -287,7 +293,7 @@ class JsonReader {
       int value = 0;
       if (parseNull()) {
         enabled = false;
-      } else if (!parseInt(value) || value < 0 || value > 1439) {
+      } else if (!parseInt(value) || value < 0 || value > kMaxTimerMinutes) {
         return false;
       }
       if (key == "on") {
@@ -333,6 +339,52 @@ const char *modeName(const uint8_t mode) {
   }
 }
 
+void syncTimerClock(const uint16_t currentMinutes) {
+  if (currentMinutes >= kMinutesPerDay) return;
+  timerClockKnown = true;
+  timerClockBaseMinutes = currentMinutes;
+  timerClockBaseAtMs = millis();
+}
+
+bool getWallClockMinutes(uint16_t &minutes) {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo, 10)) return false;
+  if (timeinfo.tm_hour < 0 || timeinfo.tm_hour > 23 ||
+      timeinfo.tm_min < 0 || timeinfo.tm_min > 59) {
+    return false;
+  }
+  minutes = static_cast<uint16_t>(timeinfo.tm_hour * 60 + timeinfo.tm_min);
+  return true;
+}
+
+uint16_t timerClockMinutes() {
+  if (timerClockKnown) {
+    const uint32_t elapsedMinutes =
+        (millis() - timerClockBaseAtMs) / 60000UL;
+    return static_cast<uint16_t>(
+        (timerClockBaseMinutes + elapsedMinutes) % kMinutesPerDay);
+  }
+
+  uint16_t wallClockMinutes = 0;
+  if (getWallClockMinutes(wallClockMinutes)) return wallClockMinutes;
+
+  const uint16_t remoteClockMinutes = ac.getCurrentTime();
+  return remoteClockMinutes < kMinutesPerDay ? remoteClockMinutes : 0;
+}
+
+uint16_t timerTargetFromDuration(const uint16_t currentMinutes,
+                                 const uint16_t durationMinutes) {
+  return static_cast<uint16_t>((currentMinutes + durationMinutes) %
+                               kMinutesPerDay);
+}
+
+uint16_t timerDurationFromTarget(const bool enabled, const uint16_t targetMinutes) {
+  if (!enabled) return 0;
+  const uint16_t currentMinutes = timerClockMinutes();
+  return static_cast<uint16_t>((targetMinutes + kMinutesPerDay -
+                                currentMinutes) % kMinutesPerDay);
+}
+
 String fanName(const uint8_t fan) {
   if (fan == kDaikinFanAuto) return "auto";
   if (fan == kDaikinFanQuiet) return "quiet";
@@ -341,8 +393,9 @@ String fanName(const uint8_t fan) {
 
 String jsonBool(const bool value) { return value ? "true" : "false"; }
 
-String jsonTimer(const bool enabled, const uint16_t value) {
-  return enabled ? String(value) : "null";
+String jsonTimer(const bool enabled, const uint16_t targetMinutes) {
+  return enabled ? String(timerDurationFromTarget(enabled, targetMinutes))
+                 : "null";
 }
 
 String acStateJson() {
@@ -421,7 +474,7 @@ void sendInvertedRawState(const uint8_t state[], const uint16_t repeat) {
   syncStateSource(StateSource::Transmitted);
 }
 
-void applyPatch(const AcPatch &patch) {
+void applyPatch(const AcPatch &patch, const uint16_t currentMinutes) {
   if (patch.hasMode) {
     ac.on();
     ac.setMode(patch.mode);
@@ -448,11 +501,15 @@ void applyPatch(const AcPatch &patch) {
   }
   if (patch.hasQuiet) ac.setQuiet(patch.quiet);
   if (patch.hasTimerOn) {
-    if (patch.timerOnEnabled) ac.enableOnTimer(patch.timerOn);
+    if (patch.timerOnEnabled) {
+      ac.enableOnTimer(timerTargetFromDuration(currentMinutes, patch.timerOn));
+    }
     else ac.disableOnTimer();
   }
   if (patch.hasTimerOff) {
-    if (patch.timerOffEnabled) ac.enableOffTimer(patch.timerOff);
+    if (patch.timerOffEnabled) {
+      ac.enableOffTimer(timerTargetFromDuration(currentMinutes, patch.timerOff));
+    }
     else ac.disableOffTimer();
   }
 }
@@ -502,7 +559,10 @@ void handleAcStatePatch() {
     return;
   }
 
-  applyPatch(patch);
+  const uint16_t currentMinutes = timerClockMinutes();
+  ac.setCurrentTime(currentMinutes);
+  syncTimerClock(currentMinutes);
+  applyPatch(patch, currentMinutes);
   sendCurrentState();
   String response = "{\"ok\":true,\"state\":";
   response += acStateJson();
@@ -527,6 +587,7 @@ void handleReplay() {
     return;
   }
   ac.setRaw(lastDaikinState, kDaikinStateLength);
+  syncTimerClock(ac.getCurrentTime());
   sendCurrentState();
   sendJson(200, "{\"ok\":true,\"ir\":{\"transmitted\":true,\"acknowledged\":false}}");
 }
@@ -671,6 +732,7 @@ bool connectWifi() {
     Serial.println(F("[WARN] Wi-Fi connection failed; HTTP server is not started"));
     return false;
   }
+  configTime(9 * 60 * 60, 0, "pool.ntp.org", "time.nist.gov");
   Serial.print(F("[INFO] Wi-Fi connected; IP: "));
   Serial.println(WiFi.localIP());
   return true;
@@ -682,6 +744,7 @@ void receiveIrFrame() {
       results.bits == kDaikinBits) {
     memcpy(lastDaikinState, results.state, kDaikinStateLength);
     ac.setRaw(lastDaikinState, kDaikinStateLength);
+    syncTimerClock(ac.getCurrentTime());
     hasReceivedDaikinState = true;
     lastReceivedAtMs = millis();
     syncStateSource(StateSource::Received);
