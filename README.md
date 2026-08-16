@@ -52,13 +52,34 @@ LED はエアコン室内機の受光部へ向けます。VS1838B と ESP32、�
 
 起動時は赤外線を送信しない。シリアルモニタから次のコマンドでテストできる。
 
+対象リモコンは `ARC446A3`、プロトコルは `DAIKIN 280-bit`。
+
 ```text
 on
 off
+auto 25
 cool 24
 heat 24
 dry 25
 fan
+temp 26
+fan auto
+fan 1
+fan 2
+fan 3
+fan 4
+fan 5
+swing on
+swing off
+comfort on
+comfort off
+mold on
+mold off
+quiet on
+quiet off
+timer-on 420
+timer-off 1380
+timer-cancel
 replay
 raw_on
 raw_off
@@ -80,3 +101,7 @@ status
 `raw_on` / `raw_off` は、今回の純正リモコンから取得したON/OFFフレームを
 そのまま送る診断用コマンド。`burst_on` / `burst_off` は同じフレームを3回送り、
 `inv_on` / `inv_off` は送信極性を反転して3回送る。
+
+純正リモコンの未知ボタンをVS1838Bへ向けて押すと、前回のDAIKINフレームとの差分が
+`[DEBUG] diff byte[...]` として表示される。快眠・健康冷房などは、この差分を確認して
+から専用コマンドへ割り当てる。

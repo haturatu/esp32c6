@@ -18,7 +18,7 @@ decode_results results;
 bool hasReceivedDaikinState = false;
 uint8_t lastDaikinState[kDaikinStateLength];
 
-// Captured from the ARC469A18 remote paired with AN22NESJ-W.
+// Captured from the ARC446A3 remote paired with AN22NESJ-W.
 const uint8_t kCapturedOnState[kDaikinStateLength] = {
     0x11, 0xDA, 0x27, 0x00, 0xC5, 0x00, 0x00, 0xD7, 0x11, 0xDA,
     0x27, 0x00, 0x42, 0x00, 0x00, 0x54, 0x11, 0xDA, 0x27, 0x00,
@@ -31,7 +31,11 @@ const uint8_t kCapturedOffState[kDaikinStateLength] = {
     0x00, 0xC1, 0x00, 0x00, 0x52};
 
 void printHelp() {
-  Serial.println(F("[INFO] commands: on, off, cool [temp], heat [temp], dry [temp], fan, replay, raw_on, raw_off, burst_on, burst_off, inv_on, inv_off, status, help"));
+  Serial.println(F("[INFO] power/mode: on, off, auto [temp], cool [temp], heat [temp], dry [temp], fan"));
+  Serial.println(F("[INFO] settings: temp [10..32], fan auto|quiet|1|2|3|4|5, swing on|off"));
+  Serial.println(F("[INFO] features: comfort on|off, mold on|off, quiet on|off"));
+  Serial.println(F("[INFO] timers: timer-on [minutes], timer-off [minutes], timer-cancel"));
+  Serial.println(F("[INFO] diagnostics: replay, raw_on, raw_off, burst_on, burst_off, inv_on, inv_off, status, help"));
 }
 
 void sendCurrentState(const char *reason, const uint16_t repeat = 0) {
@@ -73,6 +77,71 @@ void setModeFromCommand(const uint8_t mode, const String &command,
   sendCurrentState(modeName);
 }
 
+void setTemperatureFromCommand(const String &command) {
+  const String argument = command.substring(4);
+  const int temperature = argument.toInt();
+  if (argument.length() == 0 || temperature < kDaikinMinTemp ||
+      temperature > kDaikinMaxTemp) {
+    Serial.println(F("[WARN] temperature must be 10..32C"));
+    return;
+  }
+  ac.setTemp(temperature);
+  sendCurrentState("temp");
+}
+
+void setFanFromCommand(const String &command) {
+  String argument = command.substring(3);
+  argument.trim();
+  if (argument == "auto") {
+    ac.setFan(kDaikinFanAuto);
+  } else if (argument == "quiet") {
+    ac.setFan(kDaikinFanQuiet);
+  } else {
+    const int speed = argument.toInt();
+    if (argument.length() == 0 || speed < kDaikinFanMin ||
+        speed > kDaikinFanMax) {
+      Serial.println(F("[WARN] fan must be auto, quiet, or 1..5"));
+      return;
+    }
+    ac.setFan(speed);
+  }
+  sendCurrentState("fan speed");
+}
+
+bool parseToggle(const String &command, const char *name, bool &value) {
+  String argument = command.substring(strlen(name));
+  argument.trim();
+  if (argument == "on") {
+    value = true;
+    return true;
+  }
+  if (argument == "off") {
+    value = false;
+    return true;
+  }
+  Serial.print(F("[WARN] use "));
+  Serial.print(name);
+  Serial.println(F(" on|off"));
+  return false;
+}
+
+void setTimerFromCommand(const String &command, const char *name,
+                         const bool onTimer) {
+  String argument = command.substring(strlen(name));
+  argument.trim();
+  const int minutes = argument.toInt();
+  if (argument.length() == 0 || minutes < 0 || minutes > 1439) {
+    Serial.println(F("[WARN] timer must be minutes from 0 to 1439"));
+    return;
+  }
+  if (onTimer) {
+    ac.enableOnTimer(minutes);
+  } else {
+    ac.enableOffTimer(minutes);
+  }
+  sendCurrentState(name);
+}
+
 void handleCommand(String command) {
   command.trim();
   command.toLowerCase();
@@ -112,6 +181,8 @@ void handleCommand(String command) {
     sendInvertedRawState(kCapturedOnState, "raw captured remote ON, inverted output");
   } else if (command == "inv_off") {
     sendInvertedRawState(kCapturedOffState, "raw captured remote OFF, inverted output");
+  } else if (command == "auto" || command.startsWith("auto ")) {
+    setModeFromCommand(kDaikinAuto, command, "auto");
   } else if (command.startsWith("cool")) {
     setModeFromCommand(kDaikinCool, command, "cool");
   } else if (command.startsWith("heat")) {
@@ -122,9 +193,68 @@ void handleCommand(String command) {
     ac.on();
     ac.setMode(kDaikinFan);
     sendCurrentState("fan");
+  } else if (command.startsWith("fan ")) {
+    setFanFromCommand(command);
+  } else if (command.startsWith("temp")) {
+    setTemperatureFromCommand(command);
+  } else if (command.startsWith("swing")) {
+    bool enabled = false;
+    if (parseToggle(command, "swing", enabled)) {
+      ac.setSwingVertical(enabled);
+      sendCurrentState("swing");
+    }
+  } else if (command.startsWith("comfort")) {
+    bool enabled = false;
+    if (parseToggle(command, "comfort", enabled)) {
+      ac.setComfort(enabled);
+      sendCurrentState("comfort");
+    }
+  } else if (command.startsWith("mold")) {
+    bool enabled = false;
+    if (parseToggle(command, "mold", enabled)) {
+      ac.setMold(enabled);
+      sendCurrentState("mold");
+    }
+  } else if (command.startsWith("quiet")) {
+    bool enabled = false;
+    if (parseToggle(command, "quiet", enabled)) {
+      ac.setQuiet(enabled);
+      sendCurrentState("quiet");
+    }
+  } else if (command.startsWith("timer-on")) {
+    setTimerFromCommand(command, "timer-on", true);
+  } else if (command.startsWith("timer-off")) {
+    setTimerFromCommand(command, "timer-off", false);
+  } else if (command == "timer-cancel") {
+    ac.disableOnTimer();
+    ac.disableOffTimer();
+    sendCurrentState("timer-cancel");
   } else {
     Serial.println(F("[WARN] unknown command; type help"));
   }
+}
+
+void printHexByte(const uint8_t value) {
+  if (value < 0x10) Serial.print('0');
+  Serial.print(value, HEX);
+}
+
+void printDaikinStateDiff(const uint8_t previous[], const uint8_t current[]) {
+  bool changed = false;
+  for (uint8_t i = 0; i < kDaikinStateLength; i++) {
+    if (previous[i] == current[i]) continue;
+    changed = true;
+    Serial.print(F("[DEBUG] diff byte["));
+    Serial.print(i);
+    Serial.print(F("]: 0x"));
+    printHexByte(previous[i]);
+    Serial.print(F(" -> 0x"));
+    printHexByte(current[i]);
+    Serial.print(F(" xor=0x"));
+    printHexByte(previous[i] ^ current[i]);
+    Serial.println();
+  }
+  if (!changed) Serial.println(F("[DEBUG] diff: no state bytes changed"));
 }
 
 void receiveIrFrame() {
@@ -135,6 +265,11 @@ void receiveIrFrame() {
   Serial.println(resultToSourceCode(&results));
   if (results.decode_type == decode_type_t::DAIKIN &&
       results.bits == kDaikinBits) {
+    if (hasReceivedDaikinState) {
+      printDaikinStateDiff(lastDaikinState, results.state);
+    } else {
+      Serial.println(F("[INFO] first ARC446A3-compatible DAIKIN state captured"));
+    }
     memcpy(lastDaikinState, results.state, kDaikinStateLength);
     ac.setRaw(lastDaikinState, kDaikinStateLength);
     hasReceivedDaikinState = true;
@@ -152,7 +287,7 @@ void setup() {
   irrecv.enableIRIn();
 
   Serial.println(F("[INFO] Daikin AN22NESJ-W IR test"));
-  Serial.println(F("[INFO] expected remote: ARC469A18 / protocol: DAIKIN 280-bit"));
+  Serial.println(F("[INFO] remote: ARC446A3 / protocol: DAIKIN 280-bit"));
   Serial.println(F("[INFO] IR LED GPIO: 4"));
   Serial.println(F("[INFO] VS1838B OUT GPIO: 5"));
 
