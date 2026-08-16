@@ -46,6 +46,8 @@ struct AcPatch {
   uint8_t mode = kDaikinAuto;
   bool hasTemperature = false;
   int temperature = 0;
+  bool hasAutoOffset = false;
+  int autoOffset = 0;
   bool hasDryOffset = false;
   int dryOffset = 0;
   bool hasFan = false;
@@ -132,6 +134,12 @@ class JsonReader {
         ok = parseInt(patch.dryOffset);
         if (ok && (patch.dryOffset < -2 || patch.dryOffset > 2)) {
           return fail("invalid_dry_offset", error, statusCode, 422);
+        }
+      } else if (key == "auto_offset") {
+        patch.hasAutoOffset = true;
+        ok = parseInt(patch.autoOffset);
+        if (ok && (patch.autoOffset < -5 || patch.autoOffset > 5)) {
+          return fail("invalid_auto_offset", error, statusCode, 422);
         }
       } else if (key == "fan") {
         patch.hasFan = true;
@@ -425,8 +433,50 @@ String dryOffsetJson(const uint8_t rawTemperature) {
   return dryOffsetFromRaw(rawTemperature, offset) ? String(offset) : "null";
 }
 
+bool autoOffsetFromRaw(const uint8_t rawTemperature, int &offset) {
+  switch (rawTemperature) {
+    case 0xD6: offset = -5; return true;
+    case 0xD8: offset = -4; return true;
+    case 0xDA: offset = -3; return true;
+    case 0xDC: offset = -2; return true;
+    case 0xDE: offset = -1; return true;
+    case 0xC0: offset = 0; return true;
+    case 0xC2: offset = 1; return true;
+    case 0xC4: offset = 2; return true;
+    case 0xC6: offset = 3; return true;
+    case 0xC8: offset = 4; return true;
+    case 0xCA: offset = 5; return true;
+    default: return false;
+  }
+}
+
+bool setAutoOffset(const int offset) {
+  uint8_t rawTemperature = 0;
+  switch (offset) {
+    case -5: rawTemperature = 0xD6; break;
+    case -4: rawTemperature = 0xD8; break;
+    case -3: rawTemperature = 0xDA; break;
+    case -2: rawTemperature = 0xDC; break;
+    case -1: rawTemperature = 0xDE; break;
+    case 0: rawTemperature = 0xC0; break;
+    case 1: rawTemperature = 0xC2; break;
+    case 2: rawTemperature = 0xC4; break;
+    case 3: rawTemperature = 0xC6; break;
+    case 4: rawTemperature = 0xC8; break;
+    case 5: rawTemperature = 0xCA; break;
+    default: return false;
+  }
+  ac.getRaw()[kDaikinDryTemperatureByte] = rawTemperature;
+  return true;
+}
+
+String autoOffsetJson(const uint8_t rawTemperature) {
+  int offset = 0;
+  return autoOffsetFromRaw(rawTemperature, offset) ? String(offset) : "null";
+}
+
 void syncNormalTemperatureFromAc() {
-  if (ac.getMode() == kDaikinDry) return;
+  if (ac.getMode() == kDaikinDry || ac.getMode() == kDaikinAuto) return;
   const int temperature = static_cast<int>(ac.getTemp());
   if (temperature >= kDaikinMinTemp && temperature <= kDaikinMaxTemp) {
     normalTemperature = static_cast<uint8_t>(temperature);
@@ -455,10 +505,13 @@ String acStateJson() {
   json += ",\"mode\":\"";
   json += modeName(ac.getMode());
   json += "\",\"temperature\":";
-  if (ac.getMode() == kDaikinDry) json += "null";
+  if (ac.getMode() == kDaikinDry || ac.getMode() == kDaikinAuto) json += "null";
   else json += String(static_cast<int>(ac.getTemp()));
   json += ",\"dry_offset\":";
   if (ac.getMode() == kDaikinDry) json += dryOffsetJson(raw[kDaikinDryTemperatureByte]);
+  else json += "null";
+  json += ",\"auto_offset\":";
+  if (ac.getMode() == kDaikinAuto) json += autoOffsetJson(raw[kDaikinDryTemperatureByte]);
   else json += "null";
   json += ",\"fan\":\"";
   json += fanName(ac.getFan());
@@ -535,14 +588,18 @@ void applyPatch(const AcPatch &patch, const uint16_t currentMinutes) {
     ac.setMode(patch.mode);
   }
   if (patch.hasPower) ac.setPower(patch.power);
-  if (requestedMode != kDaikinDry && !patch.hasTemperature) {
+  if (requestedMode != kDaikinDry && requestedMode != kDaikinAuto &&
+      !patch.hasTemperature) {
     ac.setTemp(normalTemperature);
   }
   if (patch.hasTemperature) {
     ac.setTemp(patch.temperature);
     normalTemperature = static_cast<uint8_t>(patch.temperature);
   }
-  if (requestedMode == kDaikinDry) {
+  if (requestedMode == kDaikinAuto) {
+    if (patch.hasAutoOffset) setAutoOffset(patch.autoOffset);
+    else if (patch.hasMode && previousMode != kDaikinAuto) setAutoOffset(0);
+  } else if (requestedMode == kDaikinDry) {
     if (patch.hasDryOffset) setDryOffset(patch.dryOffset);
     else if (patch.hasMode && previousMode != kDaikinDry) setDryOffset(0);
   }
@@ -583,6 +640,10 @@ bool patchUsesDryMode(const AcPatch &patch) {
   return patch.hasMode ? patch.mode == kDaikinDry : ac.getMode() == kDaikinDry;
 }
 
+bool patchUsesAutoMode(const AcPatch &patch) {
+  return patch.hasMode ? patch.mode == kDaikinAuto : ac.getMode() == kDaikinAuto;
+}
+
 bool fanChangeIsLocked(const AcPatch &patch) {
   if (!patch.hasFan) return false;
 
@@ -614,6 +675,8 @@ void handleAcStatePatch() {
       sendError(parseStatus, parseError.c_str(), "temperature must be between 10 and 32");
     } else if (parseError == "invalid_dry_offset") {
       sendError(parseStatus, parseError.c_str(), "dry_offset must be between -2 and 2");
+    } else if (parseError == "invalid_auto_offset") {
+      sendError(parseStatus, parseError.c_str(), "auto_offset must be between -5 and 5");
     } else if (parseError == "unknown_field") {
       sendError(parseStatus, parseError.c_str(), "field is not supported");
     } else if (parseError == "empty_patch") {
@@ -629,9 +692,19 @@ void handleAcStatePatch() {
               "temperature is not available in dry mode; use dry_offset");
     return;
   }
+  if (patch.hasTemperature && patchUsesAutoMode(patch)) {
+    sendError(422, "invalid_auto_temperature",
+              "temperature is not available in auto mode; use auto_offset");
+    return;
+  }
   if (patch.hasDryOffset && !patchUsesDryMode(patch)) {
     sendError(422, "invalid_dry_offset",
               "dry_offset is only available in dry mode");
+    return;
+  }
+  if (patch.hasAutoOffset && !patchUsesAutoMode(patch)) {
+    sendError(422, "invalid_auto_offset",
+              "auto_offset is only available in auto mode");
     return;
   }
   if (fanChangeIsLocked(patch)) {

@@ -140,6 +140,7 @@ PATCHは全フィールドを検証してから候補状態へ一括適用し、
   "mode": "cool",
   "temperature": 26,
   "dry_offset": null,
+  "auto_offset": null,
   "fan": "auto",
   "swing": false,
   "sleep": false,
@@ -160,11 +161,23 @@ PATCHは全フィールドを検証してから候補状態へ一括適用し、
 代わりに`dry_offset`で除湿補正を表し、値は`-2`、`-1`、`0`、`1`、`2`です。
 除湿以外のモードでは`dry_offset`は`null`です。
 
+自動（`mode: "auto"`）では温度設定は使わず、`temperature`は`null`になります。
+代わりに`auto_offset`で自動運転の温度補正を表し、値は`-5`〜`+5`です。
+自動以外のモードでは`auto_offset`は`null`です。
+
 ```json
 {
   "mode": "dry",
   "temperature": null,
   "dry_offset": -1
+}
+```
+
+```json
+{
+  "mode": "auto",
+  "temperature": null,
+  "auto_offset": -3
 }
 ```
 
@@ -200,6 +213,7 @@ Content-Typeは`application/json`です。次のフィールドを任意の組�
   "mode": "cool",
   "temperature": 26,
   "dry_offset": null,
+  "auto_offset": null,
   "fan": "auto",
   "swing": true,
   "sleep": true,
@@ -221,8 +235,16 @@ Content-Typeは`application/json`です。次のフィールドを任意の組�
 {"mode":"dry","dry_offset":-1}
 ```
 
+自動の変更例:
+
+```json
+{"mode":"auto","auto_offset":-3}
+```
+
 除湿中に`temperature`を指定した場合、または除湿以外で`dry_offset`を指定した場合は
-`422 Unprocessable Entity`で拒否します。除湿から冷房・暖房へ変更すると、最後に使用した通常温度を復元します。
+`422 Unprocessable Entity`で拒否します。自動中に`temperature`を指定した場合、または自動以外で
+`auto_offset`を指定した場合も拒否します。除湿または自動から冷房・暖房へ変更すると、最後に使用した
+通常温度を復元します。
 
 成功レスポンス:
 
@@ -234,6 +256,7 @@ Content-Typeは`application/json`です。次のフィールドを任意の組�
     "mode": "cool",
     "temperature": 26,
     "dry_offset": null,
+    "auto_offset": null,
     "fan": "auto",
     "swing": false,
     "sleep": false,
