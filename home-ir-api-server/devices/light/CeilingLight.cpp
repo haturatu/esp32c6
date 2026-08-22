@@ -4,16 +4,16 @@
 
 CeilingLight::CeilingLight(IrSender &ir) : ir_(ir) {}
 
-bool CeilingLight::send(const LightCommand command) {
+IrSendResult CeilingLight::send(const LightCommand command) {
   const IrCode &code = LightCodes::forCommand(command);
-  if (!code.configured) return false;
+  if (!code.configured) return IrSendResult::NotConfigured;
   if (code.protocol == IrProtocol::Nec) {
     return ir_.sendNec(code.data, code.bits, 0);
   }
   if (code.protocol == IrProtocol::Raw) {
     return ir_.sendRaw(code.timings, code.length, code.frequency);
   }
-  return false;
+  return IrSendResult::InvalidCode;
 }
 
 bool CeilingLight::parseCommand(const String &name, LightCommand &command) {
@@ -51,20 +51,12 @@ const char *CeilingLight::commandName(const LightCommand command) {
   return "unknown";
 }
 
-const char *CeilingLight::commandCode(const LightCommand command) {
-  switch (command) {
-    case LightCommand::PowerOn: return "0x807F00FF";
-    case LightCommand::PowerOff: return "0x807F807F";
-    case LightCommand::Full: return "0x807F609F";
-    case LightCommand::Brighter: return "0x807FA05F";
-    case LightCommand::Dimmer: return "0x807F20DF";
-    case LightCommand::Cooler: return "0x807F40BF";
-    case LightCommand::Warmer: return "0x807F50AF";
-    case LightCommand::Toggle: return "0x807FC03F";
-    case LightCommand::NightLight: return "0x807FD02F";
-    case LightCommand::Cancel: return "0x807FE01F";
-    case LightCommand::Timer15Min: return "0x807F22DD";
-    case LightCommand::Timer30Min: return "0x807FFF00";
-  }
-  return "0x00000000";
+String CeilingLight::codeString(const IrCode &code) {
+  if (!code.configured) return "null";
+  String output = "0x";
+  String hex = String(static_cast<uint32_t>(code.data), HEX);
+  hex.toUpperCase();
+  while (hex.length() < 8) hex = "0" + hex;
+  output += hex;
+  return output;
 }

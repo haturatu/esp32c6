@@ -32,6 +32,7 @@ struct IrCode {
 
 namespace LightCodes {
 
+constexpr IrCode Unknown = {IrProtocol::None, 0, 0, nullptr, 0, 0, false};
 constexpr IrCode On = {IrProtocol::Nec, 0x807F00FF, 32, nullptr, 0, 38000, true};
 constexpr IrCode Off = {IrProtocol::Nec, 0x807F807F, 32, nullptr, 0, 38000, true};
 constexpr IrCode Full = {IrProtocol::Nec, 0x807F609F, 32, nullptr, 0, 38000, true};
@@ -60,7 +61,7 @@ inline const IrCode &forCommand(const LightCommand command) {
     case LightCommand::Timer15Min: return Timer15Min;
     case LightCommand::Timer30Min: return Timer30Min;
   }
-  return On;
+  return Unknown;
 }
 
 }  // namespace LightCodes

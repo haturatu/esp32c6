@@ -28,6 +28,8 @@ home-ir-api-server/
 ├── api/
 │   ├── AirconApi.cpp
 │   ├── AirconApi.h
+│   ├── ApiResponse.h
+│   ├── Json.h
 │   ├── LightApi.cpp
 │   ├── LightApi.h
 │   ├── SystemApi.cpp
@@ -47,7 +49,10 @@ home-ir-api-server/
 
 `CeilingLight`はHTTP文字列を`LightCommand` enumへ変換し、IRコードの詳細は
 `CeilingLightCodes.h`に閉じ込めています。将来コードを再調査する場合は、原則として
-このファイルだけを変更します。
+このファイルだけを変更します。APIレスポンスのコード表示も同じ`IrCode`から生成します。
+
+Daikinと照明は同じ`IrSender`インスタンスを共有します。Daikinプロトコル用の
+`IRDaikinESP`も`IrSender`が所有するため、GPIO4を家電クラスが個別に初期化しません。
 
 ## 照明API
 
@@ -93,7 +98,8 @@ Content-Type: application/json
 
 ### 個別command endpoint
 
-汎用endpointに加えて、次の個別endpointも登録しています。
+`/api/v1/light/command`がcanonical APIです。操作のしやすさを目的に、次の個別endpointも
+convenience aliasとして登録しています。新規クライアントはcanonical APIを推奨します。
 
 ```text
 POST /api/v1/light/commands/on
@@ -119,7 +125,12 @@ curl -X POST -H 'Content-Type: application/json' \
   http://esp32.local/api/v1/light/command
 ```
 
-未設定のコードは`501 ir_code_not_configured`として返せる設計です。
+未設定のコードは`501 ir_code_not_configured`、未初期化は`500 ir_sender_not_initialized`、
+不正なIRデータは`500 invalid_ir_code`として返します。
+
+APIのJSON入力は共通の小さなstrict parserで検証します。空白、型、重複キー、末尾データ、
+整数の形式を検証するため、例えば`{"temperature":26foo}`は受け付けません。エラーJSONは
+文字列のquoteとbackslashをescapeして生成します。
 
 ## エアコンAPI
 
@@ -131,9 +142,15 @@ POST /api/v1/aircon/state
 POST /api/v1/aircon/off
 ```
 
-状態指定の完全なエアコンAPIは既存の`daikin-an22nesj-w-http-api-server`を基準に、
-今後`DaikinAircon`へ段階的に移植します。照明追加によって既存のエアコンプロジェクトを
-変更しない構成です。
+起動直後はまだIRを送信していないため、`GET /api/v1/aircon/state`は次を返します。
+
+```json
+{"state":null,"state_source":"unknown"}
+```
+
+最初の送信後だけ、最後に送信した状態を`state_source: transmitted`として返します。
+既存の完全なエアコンAPIは`daikin-an22nesj-w-http-api-server`を基準に、今後
+`DaikinAircon`へ段階的に移植します。
 
 ## system API
 
@@ -175,6 +192,9 @@ python3 provision.py \
   --password '<PASSWORD>'
 ```
 
+現在は空パスワードのOpen Wi-Fiを意図的に拒否しています。WPA/WPA2等のパスワード付き
+ネットワークを使用してください。
+
 ## コンパイルと書き込み
 
 リポジトリのルートから実行します。現在の統合スケッチで必要なIR機能だけを有効にし、
@@ -203,3 +223,15 @@ arduino-cli monitor \
 
 この統合版は照明APIに時刻処理を必要としないため、NTPへ接続しません。Wi-Fiパスワードは
 NVSに保存し、Basic認証も使用しません。ネットワーク境界はLAN/VPNで管理してください。
+
+## NEC送信のround-trip確認
+
+`CeilingLightCodes.h`の値はVS1838Bで受信した32bit値を元にしていますが、IRremoteESP8266の
+bit order差異を避けるため、コード変更時は次を確認してください。
+
+1. VS1838BをGPIO5、IR LEDをGPIO4へ接続する。
+2. 受信側で元のリモコンのコードを取得する。
+3. APIから同じcommandを1回送信する。
+4. 統合スケッチのシリアルログに`[DEBUG] NEC received code=...`が出て、同じNEC 32bit値になることを確認する。
+
+APIの`acknowledged:false`は照明本体から応答がないことを明示しています。

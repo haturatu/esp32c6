@@ -3,6 +3,9 @@
 #include <WebServer.h>
 #include <WiFi.h>
 
+#include <IRrecv.h>
+#include <IRremoteESP8266.h>
+
 #include "config.h"
 #include "api/AirconApi.h"
 #include "api/LightApi.h"
@@ -14,11 +17,13 @@
 WebServer server(HOME_IR_HTTP_PORT);
 Preferences preferences;
 IrSender irSender(HOME_IR_TX_GPIO);
-DaikinAircon aircon(HOME_IR_TX_GPIO);
+DaikinAircon aircon(irSender);
 CeilingLight light(irSender);
 LightApi lightApi(server, light);
 AirconApi airconApi(server, aircon);
 SystemApi systemApi(server);
+IRrecv irReceiver(HOME_IR_RX_GPIO, 1024, 15, true);
+decode_results irResults;
 
 String wifiSsid;
 String wifiPassword;
@@ -97,7 +102,8 @@ void processSerialLine(String line) {
   } else if (line.startsWith("light ")) {
     LightCommand command;
     const String name = line.substring(6);
-    if (!CeilingLight::parseCommand(name, command) || !light.send(command)) {
+    if (!CeilingLight::parseCommand(name, command) ||
+        light.send(command) != IrSendResult::Ok) {
       Serial.println(F("[WARN] light command failed"));
     } else {
       Serial.print(F("[INFO] light command sent: "));
@@ -119,6 +125,16 @@ void processSerial() {
       serialLine += value;
     }
   }
+}
+
+void receiveIrDiagnostics() {
+  if (!irReceiver.decode(&irResults)) return;
+  if (irResults.decode_type == decode_type_t::NEC && irResults.bits == 32 &&
+      !irResults.repeat) {
+    Serial.print(F("[DEBUG] NEC received code=0x"));
+    Serial.println(static_cast<uint32_t>(irResults.value), HEX);
+  }
+  irReceiver.resume();
 }
 
 bool connectWifi() {
@@ -157,6 +173,7 @@ void setup() {
   serialLine.reserve(512);
 
   irSender.begin();
+  irReceiver.enableIRIn();
   aircon.begin();
 
   Serial.println(F("[INFO] home IR API server"));
@@ -174,5 +191,6 @@ void setup() {
 
 void loop() {
   processSerial();
+  receiveIrDiagnostics();
   if (WiFi.status() == WL_CONNECTED) server.handleClient();
 }

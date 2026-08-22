@@ -3,19 +3,11 @@
 #include <WebServer.h>
 
 #include "../devices/light/CeilingLight.h"
+#include "../ir/IrSender.h"
+#include "ApiResponse.h"
 
 namespace {
-constexpr size_t kMaxBodyLength = 256;
-
-void sendError(WebServer &server, const int status, const char *code,
-               const char *message) {
-  String body = "{\"ok\":false,\"error\":{\"code\":\"";
-  body += code;
-  body += "\",\"message\":\"";
-  body += message;
-  body += "\"}}";
-  server.send(status, "application/json", body);
-}
+constexpr size_t kLightMaxBodyLength = 256;
 }  // namespace
 
 LightApi::LightApi(WebServer &server, CeilingLight &light)
@@ -45,32 +37,29 @@ void LightApi::begin() {
 }
 
 bool LightApi::parseCommandBody(const String &body, String &command) {
-  const int keyStart = body.indexOf("\"command\"");
-  if (keyStart < 0) return false;
-  const int colon = body.indexOf(':', keyStart + 9);
-  if (colon < 0) return false;
-  const int start = body.indexOf('"', colon + 1);
-  if (start < 0) return false;
-  const int end = body.indexOf('"', start + 1);
-  if (end < 0) return false;
-  command = body.substring(start + 1, end);
+  HomeJson::Object object;
+  String parseError;
+  if (!object.parse(body, parseError) || object.size() != 1 ||
+      object.keyAt(0) != "command" || !object.getString("command", command)) {
+    return false;
+  }
   command.toLowerCase();
   return !command.isEmpty();
 }
 
 void LightApi::handleCommandRequest() {
   if (!server_.hasArg("plain")) {
-    sendError(server_, 400, "invalid_json", "request body is required");
+    HomeApi::sendJsonError(server_, 400, "invalid_json", "request body is required");
     return;
   }
   const String body = server_.arg("plain");
-  if (body.length() > kMaxBodyLength) {
-    sendError(server_, 413, "request_too_large", "request body is too large");
+  if (body.length() > kLightMaxBodyLength) {
+    HomeApi::sendJsonError(server_, 413, "request_too_large", "request body is too large");
     return;
   }
   String command;
   if (!parseCommandBody(body, command)) {
-    sendError(server_, 400, "invalid_json", "body must contain command");
+    HomeApi::sendJsonError(server_, 400, "invalid_json", "body must contain command");
     return;
   }
   sendCommand(command);
@@ -81,19 +70,36 @@ void LightApi::handleNamedCommand(const String &name) { sendCommand(name); }
 void LightApi::sendCommand(const String &name) {
   LightCommand command;
   if (!CeilingLight::parseCommand(name, command)) {
-    sendError(server_, 422, "invalid_command", "light command is not supported");
+    HomeApi::sendJsonError(server_, 422, "invalid_command", "light command is not supported");
     return;
   }
-  if (!light_.send(command)) {
-    sendError(server_, 501, "ir_code_not_configured",
-              "IR code has not been captured yet");
+  const IrSendResult result = light_.send(command);
+  if (result != IrSendResult::Ok) {
+    switch (result) {
+      case IrSendResult::NotConfigured:
+        HomeApi::sendJsonError(server_, 501, "ir_code_not_configured",
+                               "IR code has not been captured yet");
+        return;
+      case IrSendResult::NotInitialized:
+        HomeApi::sendJsonError(server_, 500, "ir_sender_not_initialized",
+                               "IR sender has not been initialized");
+        return;
+      case IrSendResult::InvalidCode:
+        HomeApi::sendJsonError(server_, 500, "invalid_ir_code", "IR code is invalid");
+        return;
+      case IrSendResult::SendFailed:
+        HomeApi::sendJsonError(server_, 500, "ir_send_failed", "IR transmission failed");
+        return;
+      case IrSendResult::Ok: break;
+    }
     return;
   }
 
+  const IrCode &code = LightCodes::forCommand(command);
   String body = "{\"ok\":true,\"device\":\"light\",\"command\":\"";
   body += CeilingLight::commandName(command);
   body += "\",\"code\":\"";
-  body += CeilingLight::commandCode(command);
+  body += CeilingLight::codeString(code);
   body += "\",\"ir\":{\"transmitted\":true,\"acknowledged\":false}}";
   server_.send(200, "application/json", body);
 }
