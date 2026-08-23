@@ -2,6 +2,7 @@
 
 class DaikinAircon;
 class WebServer;
+enum class IrSendResult : unsigned char;
 
 class AirconApi {
  public:
@@ -9,9 +10,15 @@ class AirconApi {
   void begin();
 
  private:
-  void handleState();
+  void handleStateGet();
+  void handleStatePatch();
   void handleOff();
-  void handleStatePost();
+  void handleReceived();
+  void handleReplay();
+  void handleDiagnostics();
+  void handlePatchBody();
+  void sendTransmissionError(IrSendResult result);
+
   WebServer &server_;
   DaikinAircon &aircon_;
 };

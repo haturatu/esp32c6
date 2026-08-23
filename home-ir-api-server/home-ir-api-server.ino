@@ -2,6 +2,7 @@
 #include <Preferences.h>
 #include <WebServer.h>
 #include <WiFi.h>
+#include <time.h>
 
 #include <IRrecv.h>
 #include <IRremoteESP8266.h>
@@ -22,7 +23,7 @@ CeilingLight light(irSender);
 LightApi lightApi(server, light);
 AirconApi airconApi(server, aircon);
 SystemApi systemApi(server);
-IRrecv irReceiver(HOME_IR_RX_GPIO, 1024, 15, true);
+IRrecv irReceiver(HOME_IR_RX_GPIO, 1024, 50, true);
 decode_results irResults;
 
 String wifiSsid;
@@ -84,6 +85,35 @@ void handleProvisionLine(const String &line) {
   ESP.restart();
 }
 
+void printIrSendResult(const IrSendResult result) {
+  switch (result) {
+    case IrSendResult::Ok:
+      Serial.println(F("[INFO] IR command sent"));
+      return;
+    case IrSendResult::RateLimited:
+      Serial.println(F("[WARN] IR rate limited; wait at least 100ms"));
+      return;
+    case IrSendResult::NotInitialized:
+      Serial.println(F("[WARN] IR sender is not initialized"));
+      return;
+    case IrSendResult::NotConfigured:
+      Serial.println(F("[WARN] IR code is not configured"));
+      return;
+    case IrSendResult::InvalidCode:
+      Serial.println(F("[WARN] IR code is invalid"));
+      return;
+    case IrSendResult::SendFailed:
+      Serial.println(F("[WARN] IR transmission failed"));
+      return;
+  }
+}
+
+void printSerialHelp() {
+  Serial.println(F("[INFO] send <on|off|full|brighter|dimmer|cooler|warmer|toggle|night_light|cancel|timer_15m|timer_30m>"));
+  Serial.println(F("[INFO] light <same commands as send>"));
+  Serial.println(F("[INFO] status"));
+}
+
 void processSerialLine(String line) {
   line.trim();
   if (line.isEmpty()) return;
@@ -93,25 +123,35 @@ void processSerialLine(String line) {
   }
   line.toLowerCase();
   if (line == "help") {
-    Serial.println(F("[INFO] light <on|off|full|brighter|dimmer|cooler|warmer|toggle|night_light|cancel|timer_15m|timer_30m>"));
-    Serial.println(F("[INFO] status"));
-  } else if (line == "status") {
-    Serial.print(F("[INFO] light API: http://"));
-    Serial.print(WiFi.localIP());
-    Serial.println(F("/api/v1/light/command"));
-  } else if (line.startsWith("light ")) {
+    printSerialHelp();
+    return;
+  }
+  if (line == "status") {
+    Serial.print(F("[INFO] light state: "));
+    Serial.println(light.stateJson());
+    Serial.print(F("[INFO] aircon state: "));
+    Serial.println(aircon.stateJson());
+    return;
+  }
+
+  String commandName;
+  if (line.startsWith("send ")) commandName = line.substring(5);
+  else if (line.startsWith("light ")) commandName = line.substring(6);
+  if (!commandName.isEmpty()) {
     LightCommand command;
-    const String name = line.substring(6);
-    if (!CeilingLight::parseCommand(name, command) ||
-        light.send(command) != IrSendResult::Ok) {
-      Serial.println(F("[WARN] light command failed"));
-    } else {
-      Serial.print(F("[INFO] light command sent: "));
+    if (!CeilingLight::parseCommand(commandName, command)) {
+      Serial.println(F("[WARN] unknown light command"));
+      return;
+    }
+    const IrSendResult result = light.send(command);
+    printIrSendResult(result);
+    if (result == IrSendResult::Ok) {
+      Serial.print(F("[INFO] light command: "));
       Serial.println(CeilingLight::commandName(command));
     }
-  } else {
-    Serial.println(F("[WARN] unknown command; type help"));
+    return;
   }
+  Serial.println(F("[WARN] unknown command; type help"));
 }
 
 void processSerial() {
@@ -127,12 +167,24 @@ void processSerial() {
   }
 }
 
-void receiveIrDiagnostics() {
+void receiveIrFrame() {
   if (!irReceiver.decode(&irResults)) return;
-  if (irResults.decode_type == decode_type_t::NEC && irResults.bits == 32 &&
-      !irResults.repeat) {
-    Serial.print(F("[DEBUG] NEC received code=0x"));
-    Serial.println(static_cast<uint32_t>(irResults.value), HEX);
+
+  if (irResults.decode_type == decode_type_t::DAIKIN &&
+      irResults.bits == kDaikinBits && !irResults.repeat) {
+    if (aircon.handleReceived(irResults.state, kDaikinStateLength, millis())) {
+      Serial.println(F("[INFO] DAIKIN 280-bit state received from VS1838B"));
+    }
+  } else if (irResults.decode_type == decode_type_t::NEC &&
+             irResults.bits == 32 && !irResults.repeat) {
+    const uint32_t code = static_cast<uint32_t>(irResults.value);
+    if (light.handleReceived(code, 32, millis())) {
+      Serial.print(F("[DEBUG] NEC light received code=0x"));
+      Serial.println(code, HEX);
+    } else {
+      Serial.print(F("[DEBUG] NEC received code=0x"));
+      Serial.println(code, HEX);
+    }
   }
   irReceiver.resume();
 }
@@ -157,14 +209,35 @@ bool connectWifi() {
     Serial.println(F("[WARN] Wi-Fi connection failed; HTTP server is not started"));
     return false;
   }
+
+  configTime(9 * 60 * 60, 0, "time.google.com", "time.cloudflare.com");
+  Serial.println(F("[INFO] NTP configured: time.google.com, time.cloudflare.com"));
   Serial.print(F("[INFO] Wi-Fi connected; IP: "));
   Serial.println(WiFi.localIP());
   return true;
 }
 
+bool isKnownApiPath(const String &uri) {
+  if (uri == "/api/v1/health" || uri == "/api/v1/system/health" ||
+      uri == "/api/v1/system/info" || uri == "/api/v1/ac/state" ||
+      uri == "/api/v1/aircon/state" || uri == "/api/v1/ac/off" ||
+      uri == "/api/v1/aircon/off" || uri == "/api/v1/ir/received" ||
+      uri == "/api/v1/ir/replay" ||
+      uri == "/api/v1/ir/diagnostics/send" ||
+      uri == "/api/v1/light/state" || uri == "/api/v1/light/command") {
+    return true;
+  }
+  return uri.startsWith("/api/v1/light/commands/");
+}
+
 void handleNotFound() {
-  server.send(404, "application/json",
-              "{\"ok\":false,\"error\":{\"code\":\"not_found\"}}");
+  if (isKnownApiPath(server.uri())) {
+    server.send(405, "application/json",
+                "{\"error\":{\"code\":\"method_not_allowed\",\"message\":\"HTTP method is not supported for this endpoint\"}}");
+  } else {
+    server.send(404, "application/json",
+                "{\"error\":{\"code\":\"not_found\",\"message\":\"endpoint does not exist\"}}");
+  }
 }
 
 void setup() {
@@ -177,7 +250,8 @@ void setup() {
   aircon.begin();
 
   Serial.println(F("[INFO] home IR API server"));
-  Serial.println(F("[INFO] TX GPIO4 / RX GPIO5 / LAN only / Basic auth disabled"));
+  Serial.println(F("[INFO] TX GPIO4 / RX GPIO5 / DAIKIN 280-bit + NEC 32-bit"));
+  Serial.println(F("[INFO] LAN only / Basic auth disabled"));
   loadWifiCredentials();
   if (connectWifi()) {
     lightApi.begin();
@@ -187,10 +261,11 @@ void setup() {
     server.begin();
     Serial.println(F("[INFO] HTTP API listening on port 80"));
   }
+  printSerialHelp();
 }
 
 void loop() {
   processSerial();
-  receiveIrDiagnostics();
+  receiveIrFrame();
   if (WiFi.status() == WL_CONNECTED) server.handleClient();
 }

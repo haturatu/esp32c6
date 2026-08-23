@@ -44,12 +44,59 @@ home-ir-api-server/
 │       └── CeilingLightCodes.h
 └── ir/
     ├── IrSender.cpp
-    └── IrSender.h
+    ├── IrSender.h
+    └── IrTransmission.h
 ```
 
 `CeilingLight`はHTTP文字列を`LightCommand` enumへ変換し、IRコードの詳細は
 `CeilingLightCodes.h`に閉じ込めています。将来コードを再調査する場合は、原則として
 このファイルだけを変更します。APIレスポンスのコード表示も同じ`IrCode`から生成します。
+
+### NECのrepeat送信
+
+照明リモコンは1回のボタン操作で複数のIRフレームを送るため、各`IrCode`に送信プロファイルを
+持たせています。現在の照明コマンドは、標準NECのrepeat rasterを明示的に再現する次の設定です。
+
+```text
+通常のNECフレーム 1回
+NEC専用repeatフレーム 2回
+各フレームの開始から次のフレーム開始まで 110ms
+```
+
+repeat部分は同じ32-bitデータの単純な連打ではなく、次の0-bit特殊フレームです。
+
+```text
+38kHz carrier
+8960us mark
+2240us space
+560us mark
+```
+
+通常のデータフレームは、8960us header mark、4480us header space、560us mark、
+1680us/560usのデータspace、560us footer markを使います。最後のrepeat後には余分な待ち時間を
+追加しません。
+
+`IRremoteESP8266::sendNEC(..., repeats)`にも同じ種類のNEC特殊repeat処理がありますが、今回の
+`IrRepeatMode::NecStandard`は、標準Arduino-IRremoteの`sendNECRepeat()`に合わせて波形と
+110msの開始時刻rasterを`IrSender`内で明示的に生成します。これにより、ライブラリ内部の
+最小メッセージ長に依存せず、標準NECとNEC2（データフレーム反復）の違いも保持できます。
+
+標準NECのrepeat波形・110ms周期は、[Arduino-IRremoteのNEC実装](https://github.com/Arduino-IRremote/Arduino-IRremote/blob/master/src/ir_NEC.hpp)
+および[IRremoteESP8266のNEC実装](https://github.com/crankyoldgit/IRremoteESP8266/blob/master/src/ir_NEC.cpp)
+に基づいています。
+
+この設定は`devices/light/CeilingLightCodes.h`の`kLightTransmitProfile`だけで変更できます。
+将来、機器が通常フレームの繰り返しを要求する場合は、`IrRepeatMode::FullFrame`と
+`interFrameGapUs`を使えます。これはNEC2系など、特殊repeatではなく同じデータフレームを
+指定した無信号時間を空けて送る機器向けです。送信プロファイルの実行は`IrSender`が担当し、API層や照明
+デバイス層には波形タイミングを持ち込みません。
+
+API間の100ms制限と、1コマンド内部のrepeatは別物です。100ms制限はHTTP等から別コマンドを
+連打する場合にだけ適用され、1コマンドのrepeat途中で適用されることはありません。
+
+スマートフォンのカメラで見える点滅だけでは、38kHz搬送波のまとまりとNECフレームのrepeatを
+完全には区別できません。正確なフレーム数・間隔が必要になった場合は、VS1838Bまたは
+ロジックアナライザで純正リモコンの波形を測定し、上記プロファイルを調整します。
 
 Daikinと照明は同じ`IrSender`インスタンスを共有します。Daikinプロトコル用の
 `IRDaikinESP`も`IrSender`が所有するため、GPIO4を家電クラスが個別に初期化しません。
@@ -128,29 +175,104 @@ curl -X POST -H 'Content-Type: application/json' \
 未設定のコードは`501 ir_code_not_configured`、未初期化は`500 ir_sender_not_initialized`、
 不正なIRデータは`500 invalid_ir_code`として返します。
 
+### 照明状態
+
+```http
+GET /api/v1/light/state
+```
+
+照明本体からACKは返らないため、最後に送信または受信したリモコン操作を返します。
+起動直後は`state_source`が`initial`、短時間に連続送信した場合は`429 ir_rate_limited`です。
+
+```json
+{
+  "last_command": "on",
+  "last_code": "0x807F00FF",
+  "protocol": "NEC",
+  "bits": 32,
+  "last_transmitted_at_ms": 12345,
+  "state_source": "transmitted"
+}
+```
+
 APIのJSON入力は共通の小さなstrict parserで検証します。空白、型、重複キー、末尾データ、
 整数の形式を検証するため、例えば`{"temperature":26foo}`は受け付けません。エラーJSONは
 文字列のquoteとbackslashをescapeして生成します。
 
 ## エアコンAPI
 
-既存のDaikinデバイスを統合するため、基本的な互換APIを用意しています。
+ARC446A3 / Daikin AN22NESJ-Wの完全な状態APIです。canonical pathは
+`/api/v1/aircon/state`ですが、既存クライアント向けに`/api/v1/ac/state`も同じ内容で
+提供します。状態変更は`PATCH`を推奨し、旧統合版向けに`POST`も受け付けます。
 
 ```text
 GET  /api/v1/aircon/state
+PATCH /api/v1/aircon/state
 POST /api/v1/aircon/state
 POST /api/v1/aircon/off
+GET  /api/v1/ac/state
+PATCH /api/v1/ac/state
+POST /api/v1/ac/off
 ```
 
-起動直後はまだIRを送信していないため、`GET /api/v1/aircon/state`は次を返します。
+対応フィールドは`power`, `mode`, `temperature`, `dry_offset`, `auto_offset`, `fan`,
+`swing`, `sleep`, `health`, `comfort`, `clean`, `quiet`, `timer.on`, `timer.off`です。
+
+`temperature`は冷房/暖房/送風で10〜32℃、`dry_offset`は除湿時に-2〜+2、
+`auto_offset`は自動時に-5〜+5です。自動・除湿時に`temperature`を指定すると422になります。
+タイマーは現在からの相対分数で、0〜720分（最大12時間）です。
+
+```bash
+curl -X PATCH -H 'Content-Type: application/json' \
+  -d '{"power":true,"mode":"cool","temperature":26,"fan":"auto","swing":true}' \
+  http://esp32.local/api/v1/ac/state
+
+curl -X PATCH -H 'Content-Type: application/json' \
+  -d '{"mode":"dry","dry_offset":-1}' \
+  http://esp32.local/api/v1/ac/state
+
+curl -X PATCH -H 'Content-Type: application/json' \
+  -d '{"mode":"auto","auto_offset":-3,"timer":{"off":120}}' \
+  http://esp32.local/api/v1/ac/state
+```
+
+`health=true`または`comfort=true`の間に風量を変更すると、純正リモコンの制約に合わせて
+`409 fan_locked_by_feature`を返します。
+
+起動直後は初期状態を`state_source: initial`として返します。送信後は`transmitted`、
+VS1838Bで純正リモコンの280-bitフレームを受信した後は`received`になります。
 
 ```json
-{"state":null,"state_source":"unknown"}
+{
+  "power": true,
+  "mode": "cool",
+  "temperature": 26,
+  "dry_offset": null,
+  "auto_offset": null,
+  "fan": "auto",
+  "swing": false,
+  "sleep": false,
+  "health": false,
+  "comfort": false,
+  "clean": false,
+  "quiet": false,
+  "timer": {"on": null, "off": null},
+  "state_source": "initial"
+}
 ```
 
-最初の送信後だけ、最後に送信した状態を`state_source: transmitted`として返します。
-既存の完全なエアコンAPIは`daikin-an22nesj-w-http-api-server`を基準に、今後
-`DaikinAircon`へ段階的に移植します。
+### Daikin受信とreplay
+
+```text
+GET  /api/v1/ir/received
+POST /api/v1/ir/replay
+```
+
+`/ir/received`は最後の280-bitフレームの受信時刻を返し、`/ir/replay`は最後に受信した
+フレームを再送します。受信履歴がない場合、replayは`409 no_received_ir_state`です。
+
+送信層はDaikinと照明で共有し、全送信に100msの間隔制御を適用します。Daikinは必要な
+待ち時間を内部で待機し、照明の連続送信は`429 ir_rate_limited`になります。
 
 ## system API
 
@@ -161,6 +283,9 @@ GET /api/v1/health
 GET /api/v1/system/health
 GET /api/v1/system/info
 ```
+
+`system/info`の`ir.protocols.light`はNEC 32-bit、`ir.protocols.aircon`はDAIKIN 280-bitを
+示します。URLは存在するがHTTPメソッドが違う場合は`405 method_not_allowed`を返します。
 
 ## 配線
 
@@ -221,8 +346,13 @@ arduino-cli monitor \
 
 ## NTPと認証
 
-この統合版は照明APIに時刻処理を必要としないため、NTPへ接続しません。Wi-Fiパスワードは
-NVSに保存し、Basic認証も使用しません。ネットワーク境界はLAN/VPNで管理してください。
+Wi-Fi接続後、Daikinタイマーの絶対時刻変換用に`time.google.com`と
+`time.cloudflare.com`をNTPサーバーとして設定します。`pool.ntp.org`は使用しません。
+Wi-FiパスワードはNVSに保存し、Basic認証も使用しません。ネットワーク境界はLAN/VPNで
+管理してください。
+
+シリアルでは`send on`または`light on`、`status`、`help`を使用できます。`status`は
+照明とエアコンの完全なJSON状態を表示します。
 
 ## NEC送信のround-trip確認
 

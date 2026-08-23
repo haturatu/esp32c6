@@ -11,6 +11,7 @@ class LightApi {
   void begin();
 
  private:
+  void handleState();
   void handleCommandRequest();
   void handleNamedCommand(const String &name);
   void sendCommand(const String &name);

@@ -6,12 +6,13 @@
 
 namespace HomeJson {
 
-enum class ValueType : uint8_t { Null, Boolean, Integer, String };
+enum class ValueType : uint8_t { Null, Boolean, Integer, String, Object };
 
 struct Field {
   String key;
   ValueType type = ValueType::Null;
   String stringValue;
+  String objectValue;
   int32_t integerValue = 0;
   bool booleanValue = false;
 };
@@ -83,6 +84,13 @@ class Object {
     return true;
   }
 
+  bool getObjectJson(const char *key, String &value) const {
+    const Field *field = find(key);
+    if (field == nullptr || field->type != ValueType::Object) return false;
+    value = field->objectValue;
+    return true;
+  }
+
  private:
   const String *input_ = nullptr;
   size_t position_ = 0;
@@ -148,6 +156,10 @@ class Object {
       field.type = ValueType::String;
       return parseString(field.stringValue);
     }
+    if (current == '{') {
+      field.type = ValueType::Object;
+      return parseObject(field.objectValue);
+    }
     if (input_->startsWith("true", position_)) {
       position_ += 4;
       field.type = ValueType::Boolean;
@@ -166,6 +178,40 @@ class Object {
       return true;
     }
     return parseInteger(field);
+  }
+
+  bool parseObject(String &value) {
+    const size_t start = position_;
+    int depth = 0;
+    bool inString = false;
+    bool escaped = false;
+    while (!atEnd()) {
+      const char current = (*input_)[position_++];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (current == '\\') {
+          escaped = true;
+        } else if (current == '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (current == '"') {
+        inString = true;
+      } else if (current == '{') {
+        depth++;
+      } else if (current == '}') {
+        depth--;
+        if (depth == 0) {
+          value = input_->substring(start, position_);
+          Object nested;
+          String nestedError;
+          return nested.parse(value, nestedError);
+        }
+      }
+    }
+    return false;
   }
 
   bool parseInteger(Field &field) {

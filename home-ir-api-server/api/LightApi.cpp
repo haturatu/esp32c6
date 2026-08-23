@@ -14,6 +14,7 @@ LightApi::LightApi(WebServer &server, CeilingLight &light)
     : server_(server), light_(light) {}
 
 void LightApi::begin() {
+  server_.on("/api/v1/light/state", HTTP_GET, [this]() { handleState(); });
   server_.on("/api/v1/light/command", HTTP_POST,
              [this]() { handleCommandRequest(); });
 
@@ -34,6 +35,10 @@ void LightApi::begin() {
     server_.on(path, HTTP_POST,
                [this, command]() { handleNamedCommand(command); });
   }
+}
+
+void LightApi::handleState() {
+  server_.send(200, "application/json", light_.stateJson());
 }
 
 bool LightApi::parseCommandBody(const String &body, String &command) {
@@ -87,6 +92,10 @@ void LightApi::sendCommand(const String &name) {
       case IrSendResult::InvalidCode:
         HomeApi::sendJsonError(server_, 500, "invalid_ir_code", "IR code is invalid");
         return;
+      case IrSendResult::RateLimited:
+        HomeApi::sendJsonError(server_, 429, "ir_rate_limited",
+                               "IR transmission rate limit exceeded");
+        return;
       case IrSendResult::SendFailed:
         HomeApi::sendJsonError(server_, 500, "ir_send_failed", "IR transmission failed");
         return;
@@ -100,6 +109,8 @@ void LightApi::sendCommand(const String &name) {
   body += CeilingLight::commandName(command);
   body += "\",\"code\":\"";
   body += CeilingLight::codeString(code);
-  body += "\",\"ir\":{\"transmitted\":true,\"acknowledged\":false}}";
+  body += "\",\"ir\":{\"transmitted\":true,\"acknowledged\":false},\"state\":";
+  body += light_.stateJson();
+  body += "}";
   server_.send(200, "application/json", body);
 }

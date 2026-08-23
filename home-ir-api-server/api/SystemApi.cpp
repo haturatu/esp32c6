@@ -24,7 +24,9 @@ void SystemApi::handleInfo() {
   body += String(HOME_IR_TX_GPIO);
   body += ",\"rx_gpio\":";
   body += String(HOME_IR_RX_GPIO);
-  body += "},\"wifi\":{\"rssi\":";
+  body += ",\"protocols\":{\"light\":{\"protocol\":\"NEC\",\"bits\":32},";
+  body += "\"aircon\":{\"protocol\":\"DAIKIN\",\"bits\":280}}},";
+  body += "\"wifi\":{\"rssi\":";
   body += String(WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0);
   body += "},\"uptime_seconds\":";
   body += String(millis() / 1000);
