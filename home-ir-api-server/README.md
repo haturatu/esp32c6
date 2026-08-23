@@ -55,21 +55,41 @@ home-ir-api-server/
 ### NECのrepeat送信
 
 照明リモコンは1回のボタン操作で複数のIRフレームを送るため、各`IrCode`に送信プロファイルを
-持たせています。現在の照明コマンドは、次の設定です。
+持たせています。現在の照明コマンドは、標準NECのrepeat rasterを明示的に再現する次の設定です。
 
 ```text
 通常のNECフレーム 1回
 NEC専用repeatフレーム 2回
+各フレームの開始から次のフレーム開始まで 110ms
 ```
 
-`IRremoteESP8266 2.9.0`の`sendNEC(data, bits, repeats)`を使っているため、repeat部分は
-同じ通常フレームの単純な連打ではなく、NEC仕様のrepeat波形になります。これは、NEC対応機器の
-長押し・連続受信のタイミングに合わせるためです。
+repeat部分は同じ32-bitデータの単純な連打ではなく、次の0-bit特殊フレームです。
+
+```text
+38kHz carrier
+8960us mark
+2240us space
+560us mark
+```
+
+通常のデータフレームは、8960us header mark、4480us header space、560us mark、
+1680us/560usのデータspace、560us footer markを使います。最後のrepeat後には余分な待ち時間を
+追加しません。
+
+`IRremoteESP8266::sendNEC(..., repeats)`にも同じ種類のNEC特殊repeat処理がありますが、今回の
+`IrRepeatMode::NecStandard`は、標準Arduino-IRremoteの`sendNECRepeat()`に合わせて波形と
+110msの開始時刻rasterを`IrSender`内で明示的に生成します。これにより、ライブラリ内部の
+最小メッセージ長に依存せず、標準NECとNEC2（データフレーム反復）の違いも保持できます。
+
+標準NECのrepeat波形・110ms周期は、[Arduino-IRremoteのNEC実装](https://github.com/Arduino-IRremote/Arduino-IRremote/blob/master/src/ir_NEC.hpp)
+および[IRremoteESP8266のNEC実装](https://github.com/crankyoldgit/IRremoteESP8266/blob/master/src/ir_NEC.cpp)
+に基づいています。
 
 この設定は`devices/light/CeilingLightCodes.h`の`kLightTransmitProfile`だけで変更できます。
 将来、機器が通常フレームの繰り返しを要求する場合は、`IrRepeatMode::FullFrame`と
-`interFrameGapUs`を使えます。送信プロファイルの実行は`IrSender`が担当し、API層や照明デバイス層
-には波形タイミングを持ち込みません。
+`interFrameGapUs`を使えます。これはNEC2系など、特殊repeatではなく同じデータフレームを
+指定した無信号時間を空けて送る機器向けです。送信プロファイルの実行は`IrSender`が担当し、API層や照明
+デバイス層には波形タイミングを持ち込みません。
 
 API間の100ms制限と、1コマンド内部のrepeatは別物です。100ms制限はHTTP等から別コマンドを
 連打する場合にだけ適用され、1コマンドのrepeat途中で適用されることはありません。
