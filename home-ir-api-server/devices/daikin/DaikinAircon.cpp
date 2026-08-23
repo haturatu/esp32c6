@@ -302,7 +302,7 @@ IrSendResult DaikinAircon::applyPatch(const HomeJson::Object &object,
       errorMessage = "mode must be auto, cool, heat, dry, or fan";
       return IrSendResult::InvalidCode;
     }
-    nextPower = true;
+    if (!object.has("power")) nextPower = true;
   }
 
   if (hasTemperature &&
