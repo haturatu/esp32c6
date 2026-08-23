@@ -44,12 +44,39 @@ home-ir-api-server/
 │       └── CeilingLightCodes.h
 └── ir/
     ├── IrSender.cpp
-    └── IrSender.h
+    ├── IrSender.h
+    └── IrTransmission.h
 ```
 
 `CeilingLight`はHTTP文字列を`LightCommand` enumへ変換し、IRコードの詳細は
 `CeilingLightCodes.h`に閉じ込めています。将来コードを再調査する場合は、原則として
 このファイルだけを変更します。APIレスポンスのコード表示も同じ`IrCode`から生成します。
+
+### NECのrepeat送信
+
+照明リモコンは1回のボタン操作で複数のIRフレームを送るため、各`IrCode`に送信プロファイルを
+持たせています。現在の照明コマンドは、次の設定です。
+
+```text
+通常のNECフレーム 1回
+NEC専用repeatフレーム 2回
+```
+
+`IRremoteESP8266 2.9.0`の`sendNEC(data, bits, repeats)`を使っているため、repeat部分は
+同じ通常フレームの単純な連打ではなく、NEC仕様のrepeat波形になります。これは、NEC対応機器の
+長押し・連続受信のタイミングに合わせるためです。
+
+この設定は`devices/light/CeilingLightCodes.h`の`kLightTransmitProfile`だけで変更できます。
+将来、機器が通常フレームの繰り返しを要求する場合は、`IrRepeatMode::FullFrame`と
+`interFrameGapUs`を使えます。送信プロファイルの実行は`IrSender`が担当し、API層や照明デバイス層
+には波形タイミングを持ち込みません。
+
+API間の100ms制限と、1コマンド内部のrepeatは別物です。100ms制限はHTTP等から別コマンドを
+連打する場合にだけ適用され、1コマンドのrepeat途中で適用されることはありません。
+
+スマートフォンのカメラで見える点滅だけでは、38kHz搬送波のまとまりとNECフレームのrepeatを
+完全には区別できません。正確なフレーム数・間隔が必要になった場合は、VS1838Bまたは
+ロジックアナライザで純正リモコンの波形を測定し、上記プロファイルを調整します。
 
 Daikinと照明は同じ`IrSender`インスタンスを共有します。Daikinプロトコル用の
 `IRDaikinESP`も`IrSender`が所有するため、GPIO4を家電クラスが個別に初期化しません。
