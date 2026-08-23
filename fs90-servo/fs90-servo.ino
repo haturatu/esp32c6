@@ -17,10 +17,14 @@ constexpr uint8_t kHeaterOnAngle = 65;
 constexpr uint8_t kHeaterOffAngle = 115;
 constexpr uint16_t kPressDurationMs = 500;
 constexpr uint16_t kReleaseDurationMs = 500;
+constexpr uint16_t kSweepHoldDurationMs = 2000;
 
 Servo servo;
 String serialLine;
 int currentAngle = kNeutralAngle;
+bool continuousSweep = false;
+int nextSweepAngle = kTestLeftAngle;
+uint32_t nextSweepAt = 0;
 
 bool attachServo() {
   if (servo.attached()) return true;
@@ -51,6 +55,7 @@ bool moveTo(const int angle) {
 }
 
 void detachServo() {
+  continuousSweep = false;
   if (!servo.attached()) {
     Serial.println(F("[INFO] servo already detached"));
     return;
@@ -64,16 +69,48 @@ void moveAndWait(const int angle, const uint16_t durationMs) {
   if (moveTo(angle)) delay(durationMs);
 }
 
-void runSweep() {
-  Serial.println(F("[INFO] sweep: 60 -> 90 -> 120 -> 90"));
-  moveAndWait(kTestLeftAngle, 2000);
-  moveAndWait(kNeutralAngle, 2000);
-  moveAndWait(kTestRightAngle, 2000);
-  moveAndWait(kNeutralAngle, 500);
+void startContinuousSweep() {
+  if (!attachServo()) return;
+
+  continuousSweep = true;
+  nextSweepAngle = kTestLeftAngle;
+  nextSweepAt = 0;
+  Serial.print(F("[INFO] continuous sweep started: "));
+  Serial.print(kTestLeftAngle);
+  Serial.print(F(" <-> "));
+  Serial.println(kTestRightAngle);
+}
+
+void stopContinuousSweep() {
+  if (!continuousSweep) {
+    Serial.println(F("[INFO] continuous sweep already stopped"));
+    return;
+  }
+
+  continuousSweep = false;
+  moveAndWait(kNeutralAngle, kReleaseDurationMs);
   detachServo();
+  Serial.println(F("[INFO] continuous sweep stopped"));
+}
+
+void updateContinuousSweep() {
+  if (!continuousSweep) return;
+
+  const uint32_t now = millis();
+  if (static_cast<int32_t>(now - nextSweepAt) < 0) return;
+  if (!moveTo(nextSweepAngle)) {
+    continuousSweep = false;
+    return;
+  }
+
+  nextSweepAngle = nextSweepAngle == kTestLeftAngle
+                       ? kTestRightAngle
+                       : kTestLeftAngle;
+  nextSweepAt = now + kSweepHoldDurationMs;
 }
 
 void pressHeaterSwitch(const char *name, const uint8_t pressAngle) {
+  continuousSweep = false;
   Serial.print(F("[INFO] heater switch: "));
   Serial.println(name);
   if (!moveTo(pressAngle)) return;
@@ -96,7 +133,8 @@ void printHelp() {
   Serial.println(F("[INFO] commands:"));
   Serial.println(F("[INFO]   angle <0..180>  move to an angle"));
   Serial.println(F("[INFO]   center           move to neutral angle"));
-  Serial.println(F("[INFO]   sweep            60 -> 90 -> 120 -> 90"));
+  Serial.println(F("[INFO]   sweep            continuously move across the test range"));
+  Serial.println(F("[INFO]   stop             stop sweep and return to neutral"));
   Serial.println(F("[INFO]   heater-on        press the heater ON side"));
   Serial.println(F("[INFO]   heater-off       press the heater OFF side"));
   Serial.println(F("[INFO]   detach           stop servo PWM"));
@@ -115,9 +153,21 @@ void printStatus() {
   Serial.print(kHeaterOnAngle);
   Serial.print(F(", heater-off="));
   Serial.println(kHeaterOffAngle);
+  Serial.print(F("[INFO] sweep="));
+  Serial.print(continuousSweep ? F("running ") : F("stopped "));
+  Serial.print(kTestLeftAngle);
+  Serial.print(F(" <-> "));
+  Serial.println(kTestRightAngle);
 }
 
 void handleCommand(String command) {
+  String normalizedCommand;
+  normalizedCommand.reserve(command.length());
+  for (size_t index = 0; index < command.length(); ++index) {
+    const uint8_t value = static_cast<uint8_t>(command[index]);
+    if (value >= 0x20 && value <= 0x7e) normalizedCommand += command[index];
+  }
+  command = normalizedCommand;
   command.trim();
   command.toLowerCase();
   if (command.isEmpty()) return;
@@ -131,11 +181,16 @@ void handleCommand(String command) {
     return;
   }
   if (command == "center") {
+    continuousSweep = false;
     moveTo(kNeutralAngle);
     return;
   }
   if (command == "sweep") {
-    runSweep();
+    startContinuousSweep();
+    return;
+  }
+  if (command == "stop") {
+    stopContinuousSweep();
     return;
   }
   if (command == "heater-on") {
@@ -158,6 +213,7 @@ void handleCommand(String command) {
       Serial.println(F("[WARN] usage: angle <0..180>"));
       return;
     }
+    continuousSweep = false;
     moveTo(angle);
     return;
   }
@@ -172,7 +228,7 @@ void processSerial() {
     if (value == '\n') {
       handleCommand(serialLine);
       serialLine = "";
-    } else if (serialLine.length() < 64) {
+    } else if (value >= 0x20 && value <= 0x7e && serialLine.length() < 64) {
       serialLine += value;
     }
   }
@@ -182,13 +238,13 @@ void processSerial() {
 
 void setup() {
   Serial.begin(115200);
-  delay(1000);
   serialLine.reserve(64);
 
   Serial.println(F("[INFO] XIAO ESP32-C6 FS90 servo controller"));
-  Serial.println(F("[INFO] no automatic movement on boot; type help"));
+  Serial.println(F("[INFO] ready; no automatic movement on boot; type help"));
 }
 
 void loop() {
   processSerial();
+  updateContinuousSweep();
 }
