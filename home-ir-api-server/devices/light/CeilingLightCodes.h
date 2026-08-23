@@ -35,11 +35,11 @@ struct IrCode {
 
 namespace LightCodes {
 
-// One complete NEC frame plus two protocol-native NEC repeat frames. This is
-// kept in the code table so different remotes can be tuned without changing
-// the device or API layers.
+// One complete NEC frame plus two standard NEC repeat frames on a 110 ms
+// start-to-start raster. This is kept in the code table so different remotes
+// can be tuned without changing the device or API layers.
 constexpr IrTransmitProfile kLightTransmitProfile = {
-    2, 0, IrRepeatMode::ProtocolDefault};
+    2, 0, IrRepeatMode::NecStandard};
 
 constexpr IrCode Unknown = {IrProtocol::None, 0, 0, nullptr, 0, 0,
                             kDefaultIrTransmitProfile, false};

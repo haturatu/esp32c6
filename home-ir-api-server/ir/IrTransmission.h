@@ -3,17 +3,19 @@
 #include <stdint.h>
 
 // ProtocolDefault lets the protocol implementation choose its native repeat
-// waveform. For NEC this is one full frame followed by NEC repeat frames.
-// FullFrame is available for devices that require repeated complete frames.
+// waveform. NecStandard explicitly reproduces the standard NEC repeat raster
+// and FullFrame is available for devices that require repeated complete frames.
 enum class IrRepeatMode : uint8_t {
   ProtocolDefault,
+  NecStandard,
   FullFrame,
 };
 
 struct IrTransmitProfile {
   // Number of additional frames after the first frame.
   uint16_t repeats;
-  // Used only by FullFrame. ProtocolDefault uses the protocol's timing.
+  // Used only by FullFrame. NecStandard uses a fixed 110 ms start-to-start
+  // period defined by the NEC protocol.
   uint32_t interFrameGapUs;
   IrRepeatMode repeatMode;
 };
