@@ -102,7 +102,9 @@ void AirconApi::handlePatchBody() {
       aircon_.applyPatch(object, errorCode, errorMessage);
   if (result != IrSendResult::Ok) {
     if (!errorCode.isEmpty()) {
-      HomeApi::sendJsonError(server_, 422, errorCode.c_str(), errorMessage);
+      const int statusCode = errorCode == "fan_locked_by_feature" ? 409 : 422;
+      HomeApi::sendJsonError(server_, statusCode, errorCode.c_str(),
+                             errorMessage);
     } else {
       sendTransmissionError(result);
     }
