@@ -17,9 +17,9 @@ IrSendResult CeilingLight::send(const LightCommand command) {
 
   IrSendResult result = IrSendResult::InvalidCode;
   if (code.protocol == IrProtocol::Nec) {
-    result = ir_.sendNec(code.data, code.bits, 0);
+    result = ir_.sendNec(code.data, code.bits, code.tx);
   } else if (code.protocol == IrProtocol::Raw) {
-    result = ir_.sendRaw(code.timings, code.length, code.frequency);
+    result = ir_.sendRaw(code.timings, code.length, code.frequency, code.tx);
   }
   if (result == IrSendResult::Ok) {
     hasLastCommand_ = true;

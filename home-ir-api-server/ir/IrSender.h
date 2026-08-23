@@ -4,6 +4,8 @@
 #include <IRsend.h>
 #include <ir_Daikin.h>
 
+#include "IrTransmission.h"
+
 enum class IrSendResult : uint8_t {
   Ok,
   NotConfigured,
@@ -18,7 +20,13 @@ class IrSender {
   explicit IrSender(uint8_t pin);
 
   void begin();
+  IrSendResult sendNec(uint64_t data, uint16_t bits,
+                       const IrTransmitProfile &profile,
+                       bool waitForInterval = false);
   IrSendResult sendNec(uint64_t data, uint16_t bits = 32, uint16_t repeats = 0,
+                       bool waitForInterval = false);
+  IrSendResult sendRaw(const uint16_t *timings, size_t length,
+                       uint32_t frequency, const IrTransmitProfile &profile,
                        bool waitForInterval = false);
   IrSendResult sendRaw(const uint16_t *timings, size_t length,
                        uint32_t frequency, bool waitForInterval = false);
